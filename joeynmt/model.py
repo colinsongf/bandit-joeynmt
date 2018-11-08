@@ -30,7 +30,7 @@ def build_model(cfg: dict = None,
             **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
             padding_idx=trg_padding_idx)
 
-    encoder = RecurrentEncoder(**cfg["encoder"],
+    encoder = RecurrentEncoder(**cfg["encoder"], vocab_size=len(src_vocab),
                                emb_size=src_embed.embedding_dim)
     decoder = RecurrentDecoder(**cfg["decoder"], encoder=encoder,
                                vocab_size=len(trg_vocab),
@@ -93,14 +93,14 @@ class Model(nn.Module):
         :param src_lengths:
         :return: decoder outputs
         """
-        encoder_output, encoder_hidden = self.encode(src=src,
+        encoder_output, encoder_hidden, lm_output = self.encode(src=src,
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
         unrol_steps = trg_input.size(1)
         return self.decode(encoder_output=encoder_output,
                            encoder_hidden=encoder_hidden,
                            src_mask=src_mask, trg_input=trg_input,
-                           unrol_steps=unrol_steps)
+                           unrol_steps=unrol_steps), lm_output
 
     def encode(self, src, src_length, src_mask):
         """
@@ -142,9 +142,11 @@ class Model(nn.Module):
         :param criterion:
         :return:
         """
-        out, hidden, att_probs, _ = self.forward(
+        decoder_output, lm_output = self.forward(
             src=batch.src, trg_input=batch.trg_input,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+
+        out, hidden, att_probs, _ = decoder_output
 
         # compute log probs
         log_probs = F.log_softmax(out, dim=-1)
@@ -154,6 +156,20 @@ class Model(nn.Module):
             input=log_probs.contiguous().view(-1, log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))
         # return batch loss = sum over all elements in batch that are not pad
+
+        # add lm loss
+        if lm_output is not None:
+            lm_logprobs = F.log_softmax(lm_output, dim=-1)
+            # shift inputs to the left for loss targets, ignore last hidden state
+            lm_loss = criterion(
+                input=lm_logprobs[:, :-1].contiguous().view(-1,
+                                                            lm_logprobs.size(
+                                                                -1)),
+                target=batch.src[:, 1:].contiguous().view(-1))
+            print("MT loss:", batch_loss.data.cpu().numpy(), "LM loss:",
+                  lm_loss.data.cpu().numpy(), "weighted LM loss:", self.encoder.lm_task*lm_loss.data.cpu().numpy())
+            batch_loss += self.encoder.lm_task*lm_loss  # weighted
+
         return batch_loss
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
@@ -165,7 +181,7 @@ class Model(nn.Module):
         :param beam_alpha:
         :return:
         """
-        encoder_output, encoder_hidden = self.encode(
+        encoder_output, encoder_hidden, lm_output = self.encode(
             batch.src, batch.src_lengths,
             batch.src_mask)
 
