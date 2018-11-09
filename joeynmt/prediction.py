@@ -1,11 +1,12 @@
 # coding: utf-8
 
 import torch
+import torchtext.data as data
 
 from joeynmt.constants import PAD_TOKEN
 from joeynmt.helpers import load_data, arrays_to_sentences, bpe_postprocess, \
     load_config, get_latest_checkpoint, make_data_iter, \
-    load_model_from_checkpoint, store_attention_plots
+    load_model_from_checkpoint, store_attention_plots, build_vocab, load_lm_init
 from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
 from joeynmt.model import build_model
 from joeynmt.batch import Batch
@@ -215,3 +216,70 @@ def test(cfg_file,
                 for h in hypotheses:
                     f.write(h + "\n")
             print("Translations saved to: {}".format(output_path_set))
+
+def lm(cfg_file, ckpt, size, output_path):
+    """
+    Sample inputs from the trained LM
+    :param cfg_file:
+    :param ckpt:
+    :param output_path:
+    :return:
+    """
+    cfg = load_config(cfg_file)
+
+    if "test" not in cfg["data"].keys():
+        raise ValueError("Test data must be specified in config.")
+
+    # when checkpoint is not specified, take oldest from model dir
+    if ckpt is None:
+        dir = cfg["training"]["model_dir"]
+        ckpt = get_latest_checkpoint(dir)
+        try:
+            step = ckpt.split(dir + "/")[1].split(".ckpt")[0]
+        except IndexError:
+            step = "best"
+
+    batch_size = cfg["training"]["batch_size"]
+    use_cuda = cfg["training"]["use_cuda"]
+    level = cfg["data"]["level"]
+    max_output_length = cfg["training"].get("max_output_length", None)
+
+    # load model state from disk
+    model_state = load_model_from_checkpoint(ckpt)
+    src_vocab_file = cfg["training"]["model_dir"] + "/src_vocab.txt"
+    trg_vocab_file = cfg["training"]["model_dir"] + "/trg_vocab.txt"
+    src_vocab = build_vocab(field="src", vocab_file=src_vocab_file, data=None,
+                            max_size=-1, min_freq=0)
+    trg_vocab = build_vocab(field="trg", vocab_file=trg_vocab_file, data=None,
+                            max_size=-1, min_freq=0)
+
+    # build model and load parameters into it
+    model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
+    model.load_state_dict(model_state)
+    model.eval()
+
+    lm_data = load_lm_init(data_cfg=cfg["data"], src_vocab=src_vocab,
+                           trg_vocab=trg_vocab)
+    data_iter = make_data_iter(lm_data, batch_size=batch_size, train=False,
+                               shuffle=False)
+
+    # TODO no data needed, just feed batch of <s>
+    join_char = "" if level == "char" else " "
+    output_seqs = []
+    with open("{}.{}.input_samples".format(output_path, size), "w") as opf:
+        while len(output_seqs) < size:
+            for tbatch in data_iter:
+                initial_input = Batch(torch_batch=tbatch,
+                                      pad_index=src_vocab.stoi[PAD_TOKEN],
+                                      use_cuda=use_cuda)
+                outputs = model.encoder.sample(max_output_length, initial_input,
+                                               src_embeddings=model.src_embed)
+                output_seqs.extend(
+                    arrays_to_sentences(
+                        outputs, vocabulary=src_vocab, cut_at_eos=True))
+        output_seqs = output_seqs[:size]
+        post_outputs = [join_char.join(s)+"\n" for s in output_seqs]
+        # for each batch contains a string
+        opf.writelines(post_outputs)
+
+

@@ -178,6 +178,35 @@ def log_data_info(train_data, valid_data, test_data, src_vocab, trg_vocab,
     logging_function("Number of Trg words (types): {}".format(len(trg_vocab)))
 
 
+def load_lm_init(data_cfg, src_vocab, trg_vocab):
+    """
+    Make a fake data set that includes only batch of <s>
+    :param data_cfg:
+    :return:
+    """
+    level = data_cfg["level"]
+    lowercase = data_cfg["lowercase"]
+    if level == "char":
+        tok_fun = lambda s: list(s)
+    else:  # bpe or word, pre-tokenized
+        tok_fun = lambda s: s.split()
+    src_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN,
+                           pad_token=PAD_TOKEN, tokenize=tok_fun,
+                           batch_first=True, lower=lowercase,
+                           unk_token=UNK_TOKEN,
+                           include_lengths=True)
+    trg_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN,
+                           pad_token=PAD_TOKEN, tokenize=tok_fun,
+                           unk_token=UNK_TOKEN,
+                           batch_first=True, lower=lowercase,
+                           include_lengths=True)
+    sample_data = MonoDataset(path="test/data/lm/init", ext=".src",
+                             field=(src_field))
+    src_field.vocab = src_vocab
+    trg_field.vocab = trg_vocab
+    return sample_data
+
+
 def load_data(cfg):
     """
     Load train, dev and test data as specified in ccnfiguration.
@@ -240,7 +269,6 @@ def load_data(cfg):
                 fields=(src_field, trg_field))
         else:
             # no target is given -> create dataset from src only
-
             test_data = MonoDataset(path=test_path, ext="." + src_lang,
                                     field=(src_field))
     src_field.vocab = src_vocab

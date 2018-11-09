@@ -58,6 +58,8 @@ class RecurrentEncoder(Encoder):
 
         self.lm_task = lm_task
         if self.lm_task > 0:
+            self.projection_layer = nn.Linear(hidden_size, hidden_size,
+                                              bias=True)
             self.output_layer = nn.Linear(hidden_size, vocab_size, bias=False)
             if num_layers > 1:
                 # treat the 1st layer separately so we can access all hidden states
@@ -125,25 +127,70 @@ class RecurrentEncoder(Encoder):
 
         lm_output = None
         if self.lm_task > 0:
-            output_layerwise = lm_rnn_output.view(batch_size, output.size(1),
-                                           2 if self.rnn.bidirectional else 1,
-                                           self.rnn.hidden_size)
+            #output_layerwise = lm_rnn_output.view(batch_size, lm_rnn_output.size(1),
+            #    2 if self.rnn.bidirectional else 1, self.rnn.hidden_size)
             # make word predictions from fwd hidden states of first layer
             # not last layer because it contains backwards info from previous layers
-            first_fw = output_layerwise[:, :, 0, :]
-            lm_output = self.output_layer(first_fw)
+            #print("chunk", torch.chunk(lm_rnn_output, 2, dim=-1)[0].size())
+            first_fw = torch.chunk(lm_rnn_output, 2, dim=-1)[0]
+            # output_layerwise[:, :, 0, :]
+            # TODO is projection needed?
+            lm_projection = torch.tanh(self.projection_layer(first_fw))
+            lm_output = self.output_layer(lm_projection)
+            #print(lm_output)
+            #print(lm_output.size())
             # batch x src_vocab_size
 
         # concatenate the final states of the last layer for each directions
         # thanks to pack_padded_sequence final states don't include padding
         fwd_hidden_last = hidden_layerwise[-1:, 0]
-        bwd_hidden_last = hidden_layerwise[-1:, 1]
+        # TODO allow unidirectional
+        if self.rnn.bidirectional:
+            bwd_hidden_last = hidden_layerwise[-1:, 1]
+        else:
+            bwd_hidden_last = fwd_hidden_last
 
         # only feed the final state of the top-most layer to the decoder
         hidden_concat = torch.cat(
             [fwd_hidden_last, bwd_hidden_last], dim=2).squeeze(0)
         # final: batch x directions*hidden
         return output, hidden_concat, lm_output
+
+    def sample(self, max_output_length, initial_input, src_embeddings):
+        """
+        Sample src outputs from encoder hidden states
+        :param max_output_length:
+        :param initial_input:
+        :return:
+        """
+        initial_symbols = initial_input.src[:, 0].view(
+            initial_input.src.size(0), 1)
+        embedded_input = src_embeddings(initial_symbols)
+        outputs = []
+        hidden = None
+        for t in range(max_output_length):
+            if self.num_layers > 1:
+                # first pass it through first layer
+                output, hidden = self.lm_rnn(embedded_input, hidden)
+            else:
+                # only one layer and lm: use standard RNN
+                output, hidden = self.rnn(embedded_input, hidden)
+            # batch x 1 x hidden_size*directions
+            fw_output = output.chunk(chunks=2, dim=-1)[0]
+            # batch x 1 x hidden_size
+            lm_projection = torch.tanh(self.projection_layer(fw_output))
+            lm_output = self.output_layer(lm_projection).squeeze(1)
+            # batch x src_vocab
+            predicted = torch.multinomial(
+                input=torch.nn.functional.softmax(lm_output, dim=-1), num_samples=1)
+            outputs.append(predicted)
+            # batch x 1
+            embedded_input = src_embeddings(predicted)
+            # batch x 1 x embed_size
+        outputs = torch.cat(outputs, dim=1)
+        # TODO track logprob
+        return outputs
+
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self.rnn)

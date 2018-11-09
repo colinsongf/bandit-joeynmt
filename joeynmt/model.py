@@ -1,4 +1,5 @@
 # coding: utf-8
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -9,6 +10,7 @@ from joeynmt.decoders import Decoder, RecurrentDecoder
 from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
+from joeynmt.helpers import arrays_to_sentences
 
 
 def build_model(cfg: dict = None,
@@ -145,6 +147,18 @@ class Model(nn.Module):
         decoder_output, lm_output = self.forward(
             src=batch.src, trg_input=batch.trg_input,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+        predictions = arrays_to_sentences(arrays=torch.argmax(lm_output[:, :-1, :], dim=-1),
+                                            vocabulary=self.src_vocab,
+                                            cut_at_eos=False)  # batch x length
+        correct = arrays_to_sentences(arrays=batch.src[:, 1:],
+                                            vocabulary=self.src_vocab,
+                                            cut_at_eos=False)
+        print("input",arrays_to_sentences(arrays=batch.src,
+                                            vocabulary=self.src_vocab,
+                                            cut_at_eos=False)[0] )
+        print("correct", correct[0])
+        print("predicted", predictions[0])
+
 
         out, hidden, att_probs, _ = decoder_output
 
@@ -166,11 +180,12 @@ class Model(nn.Module):
                                                             lm_logprobs.size(
                                                                 -1)),
                 target=batch.src[:, 1:].contiguous().view(-1))
-            print("MT loss:", batch_loss.data.cpu().numpy(), "LM loss:",
-                  lm_loss.data.cpu().numpy(), "weighted LM loss:", self.encoder.lm_task*lm_loss.data.cpu().numpy())
+            #print("MT loss:", batch_loss.data.cpu().numpy(), "LM loss:",
+            #      lm_loss.data.cpu().numpy(), "weighted LM loss:", self.encoder.lm_task*lm_loss.data.cpu().numpy())
             batch_loss += self.encoder.lm_task*lm_loss  # weighted
 
         return batch_loss
+
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """
@@ -181,6 +196,7 @@ class Model(nn.Module):
         :param beam_alpha:
         :return:
         """
+
         encoder_output, encoder_hidden, lm_output = self.encode(
             batch.src, batch.src_lengths,
             batch.src_mask)
