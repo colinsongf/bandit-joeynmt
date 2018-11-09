@@ -255,6 +255,8 @@ def lm(cfg_file, ckpt, size, output_path):
 
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
+    if use_cuda:
+        model.cuda()
     model.load_state_dict(model_state)
     model.eval()
 
