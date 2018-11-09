@@ -147,18 +147,6 @@ class Model(nn.Module):
         decoder_output, lm_output = self.forward(
             src=batch.src, trg_input=batch.trg_input,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
-        predictions = arrays_to_sentences(arrays=torch.argmax(lm_output[:, :-1, :], dim=-1),
-                                            vocabulary=self.src_vocab,
-                                            cut_at_eos=False)  # batch x length
-        correct = arrays_to_sentences(arrays=batch.src[:, 1:],
-                                            vocabulary=self.src_vocab,
-                                            cut_at_eos=False)
-        print("input",arrays_to_sentences(arrays=batch.src,
-                                            vocabulary=self.src_vocab,
-                                            cut_at_eos=False)[0] )
-        print("correct", correct[0])
-        print("predicted", predictions[0])
-
 
         out, hidden, att_probs, _ = decoder_output
 
@@ -173,6 +161,17 @@ class Model(nn.Module):
 
         # add lm loss
         if lm_output is not None:
+            predictions = arrays_to_sentences(arrays=torch.argmax(lm_output[:, :-1, :], dim=-1),
+                                                vocabulary=self.src_vocab,
+                                                cut_at_eos=False)  # batch x length
+            correct = arrays_to_sentences(arrays=batch.src[:, 1:],
+                                                vocabulary=self.src_vocab,
+                                                cut_at_eos=False)
+            print("input",arrays_to_sentences(arrays=batch.src,
+                                                vocabulary=self.src_vocab,
+                                                cut_at_eos=False)[0] )
+            print("correct", correct[0])
+            print("predicted", predictions[0])
             lm_logprobs = F.log_softmax(lm_output, dim=-1)
             # shift inputs to the left for loss targets, ignore last hidden state
             lm_loss = criterion(
