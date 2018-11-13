@@ -11,7 +11,7 @@ if __name__ == "__main__":
         for ref, hyp in zip(ref_f, hyp_f):
             for i, hyp_token in enumerate(hyp.strip().split(" ")):
                 ref_tokens = ref.strip().split(" ")
-                if i > len(ref_tokens):
+                if i >= len(ref_tokens):
                     f = 0
                 elif ref_tokens[i] == hyp_token:
                     f = 1
