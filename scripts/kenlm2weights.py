@@ -1,6 +1,4 @@
 # coding: utf-8
-
-import numpy as np
 import sys
 
 def kenlm2weights(infile):
@@ -24,6 +22,7 @@ def kenlm2weights(infile):
         sent_weights = [sum(t) for t in token_weights]
         return token_weights, sent_weights
 
+
 def write_weights(weights, infile):
     """
     Write weights to file
@@ -45,8 +44,6 @@ def write_weights(weights, infile):
             for t in token_w:
                 tokenf.write("{} ".format(t))
             tokenf.write("\n")
-
-
 
 
 if __name__ == "__main__":

@@ -17,7 +17,6 @@ class Batch:
         :param pad_index:
         :param use_cuda:
         """
-
         self.src, self.src_lengths = torch_batch.src
         self.src_mask = (self.src != pad_index).unsqueeze(-2)
         self.nseqs = self.src.size(0)
@@ -39,6 +38,26 @@ class Batch:
             self.trg_mask = (self.trg != pad_index)
             self.ntokens = (self.trg != pad_index).data.sum().item()
 
+            if hasattr(torch_batch, "weights"):
+                if len(torch_batch.weights[0]) > 1:
+                    # one weight per token given
+                    # pad remaining areas with 0s
+                    # TODO make dependent on log space?
+                    weights = np.zeros(shape=self.trg.size())
+                    for i, weight_seq in enumerate(torch_batch.weights):
+                        for j, w in enumerate(weight_seq):
+                            weights[i,j] = w
+                    weights = np.array(weights)
+                else:
+                    # one weight per sentence given -> use for every token in sent.
+                    weights = np.tile(np.expand_dims(
+                        np.array([w[0] for w in torch_batch.weights]), axis=1),
+                        [1, self.trg.size(1)])
+                self.weights = torch.from_numpy(weights).float().to(
+                    self.trg.device)
+            else:
+                self.weights = None
+
         if use_cuda:
             self._make_cuda()
 
@@ -54,6 +73,8 @@ class Batch:
             self.trg_input = self.trg_input.cuda()
             self.trg = self.trg.cuda()
             self.trg_mask = self.trg_mask.cuda()
+            if self.weights is not None:
+                self.weights = self.weights.cuda()
 
     def sort_by_src_lengths(self):
         """
@@ -73,6 +94,8 @@ class Batch:
             sorted_trg_lengths = self.trg_lengths[perm_index]
             sorted_trg_mask = self.trg_mask[perm_index]
             sorted_trg = self.trg[perm_index]
+            if self.weights is not None:
+                sorted_weights = self.weights[perm_index]
 
         self.src = sorted_src
         self.src_lengths = sorted_src_lengths
@@ -83,6 +106,8 @@ class Batch:
             self.trg_mask = sorted_trg_mask
             self.trg_lengths = sorted_trg_lengths
             self.trg = sorted_trg
+            if self.weights is not None:
+                self.weights = sorted_weights
 
         if self.use_cuda:
             self._make_cuda()

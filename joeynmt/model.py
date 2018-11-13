@@ -156,7 +156,9 @@ class Model(nn.Module):
         # compute batch loss
         batch_loss = criterion(
             input=log_probs.contiguous().view(-1, log_probs.size(-1)),
-            target=batch.trg.contiguous().view(-1))
+            target=batch.trg.contiguous().view(-1),
+            weights=batch.weights.contiguous().view(-1)
+            if batch.weights is not None else None)
         # return batch loss = sum over all elements in batch that are not pad
 
         # add lm loss

@@ -218,6 +218,7 @@ def load_data(cfg):
     src_lang = data_cfg["src"]
     trg_lang = data_cfg["trg"]
     train_path = data_cfg["train"]
+    weights_path = data_cfg.get("weights", None)
     dev_path = data_cfg["dev"]
     test_path = data_cfg.get("test", None)
     level = data_cfg["level"]
@@ -240,14 +241,30 @@ def load_data(cfg):
                            unk_token=UNK_TOKEN,
                            batch_first=True, lower=lowercase,
                            include_lengths=True)
-    train_data = TranslationDataset(path=train_path,
-                                    exts=("." + src_lang, "." + trg_lang),
-                                    fields=(src_field, trg_field),
-                                    filter_pred=
-                                    lambda x: len(vars(x)['src'])
-                                              <= max_sent_length and
-                                              len(vars(x)['trg'])
-                                              <= max_sent_length)
+    fields = (src_field, trg_field)
+
+    if weights_path is not None:
+        weight_field = data.RawField()
+        # token or sentence weights are given for training target
+        train_data = WeightedTranslationDataset(
+            path=train_path, weight_file=weights_path,
+            exts=("." + src_lang, "." + trg_lang), fields=(src_field, trg_field,
+                                                           weight_field),
+            filter_pred =
+            lambda x: len(vars(x)['src']) <= max_sent_length and
+                      len(vars(x)['trg']) <= max_sent_length,
+        log_weights=data_cfg.get("log_weights", False))
+
+
+    else:
+        train_data = TranslationDataset(path=train_path,
+                                        exts=("." + src_lang, "." + trg_lang),
+                                        fields=fields,
+                                        filter_pred=
+                                        lambda x: len(vars(x)['src'])
+                                                  <= max_sent_length and
+                                                  len(vars(x)['trg'])
+                                                  <= max_sent_length)
     max_size = data_cfg.get("voc_limit", -1)
     min_freq = data_cfg.get("voc_min_freq", 1)
     src_vocab_file = data_cfg.get("src_vocab", None)
@@ -259,14 +276,14 @@ def load_data(cfg):
                             data=train_data, vocab_file=trg_vocab_file)
     dev_data = TranslationDataset(path=dev_path,
                                   exts=("." + src_lang, "." + trg_lang),
-                                  fields=(src_field, trg_field))
+                                  fields=fields)
     test_data = None
     if test_path is not None:
         # check if target exists
         if os.path.isfile(test_path+"."+trg_lang):
             test_data = TranslationDataset(
                 path=test_path, exts=("." + src_lang, "." + trg_lang),
-                fields=(src_field, trg_field))
+                fields=fields)
         else:
             # no target is given -> create dataset from src only
             test_data = MonoDataset(path=test_path, ext="." + src_lang,
@@ -274,6 +291,44 @@ def load_data(cfg):
     src_field.vocab = src_vocab
     trg_field.vocab = trg_vocab
     return train_data, dev_data, test_data, src_vocab, trg_vocab
+
+
+class WeightedTranslationDataset(TranslationDataset):
+    """ Defines a parallel dataset with weights for the targets. """
+
+    def __init__(self, path, exts, fields, weight_file, log_weights, **kwargs):
+        """Create a TranslationDataset given paths and fields.
+
+                Arguments:
+                    path: Common prefix of paths to the data files for both languages.
+                    exts: A tuple containing the extension to path for each language.
+                    fields: A tuple containing the fields that will be used for data
+                        in each language.
+                    weight_file: A file containing weights for each sent/token
+                    log_weights: whether weights are in log space
+                    Remaining keyword arguments: Passed to the constructor of
+                        data.Dataset.
+                """
+        if not isinstance(fields[0], (tuple, list)):
+            fields = [('src', fields[0]), ('trg', fields[1]),
+                      ('weights', fields[2])]
+
+        src_path, trg_path = tuple(os.path.expanduser(path + x) for x in exts)
+
+        examples = []
+        with open(src_path) as src_file, open(trg_path) as trg_file, \
+                open(weight_file) as weight_file:
+            for src_line, trg_line, weights_line in \
+                    zip(src_file, trg_file, weight_file):
+                src_line, trg_line = src_line.strip(), trg_line.strip()
+                # move weights out of log space if needed
+                weights = [np.exp(float(weight)) if log_weights else float(weight)
+                           for weight in weights_line.strip().split(" ")]
+                if src_line != '' and trg_line != '':
+                    examples.append(data.Example.fromlist(
+                        [src_line, trg_line, weights], fields))
+
+        super(TranslationDataset, self).__init__(examples, fields, **kwargs)
 
 
 class MonoDataset(TranslationDataset):

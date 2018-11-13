@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 
 from joeynmt.model import build_model
-
+from joeynmt.loss import CrossEntropy
 from joeynmt.batch import Batch
 from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter
@@ -33,7 +33,7 @@ class TrainManager:
         self.model = model
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
-        criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
+        criterion = CrossEntropy(ignore_index=self.pad_index)
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
         if train_config["loss"].lower() not in ["crossentropy", "xent",
                                                 "mle", "cross-entropy"]:
