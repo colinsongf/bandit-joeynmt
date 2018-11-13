@@ -3,9 +3,9 @@ name: "reverse_experiment"
 data:
     src: "src"
     trg: "trg"
-    train: "test/data/reverse/train"
-    dev: "test/data/reverse/dev"
-    test: "test/data/reverse/test"
+    train: "test/data/sorted_reverse/train"
+    dev: "test/data/sorted_reverse/dev"
+    test: "test/data/sorted_reverse/test"
     level: "word"
     lowercase: False
     max_sent_length: 11
@@ -23,8 +23,8 @@ training:
     random_seed: 42
     optimizer: "adam"
     loss: "crossentropy"
-    learning_rate: 0.001
-    learning_rate_min: 0.0002
+    learning_rate: 0.0001
+    learning_rate_min: 0.000002
 #    clip_grad_val: 1.0
     weight_decay: 0.0
     clip_grad_norm: 1.0
@@ -36,8 +36,8 @@ training:
     epochs: 10
     validation_freq: 1000
     logging_freq: 100
-    eval_metric: "bleu"
-    model_dir: "reverse_luong_0003"
+    eval_metric: "token_accuracy"
+    model_dir: "reverse_lm"
     overwrite: True
     shuffle: True
     use_cuda: False
@@ -60,7 +60,7 @@ model:
         bidirectional: True
         dropout: 0.1
         num_layers: 1
-        lm_task: 0.4 # weighting for lm loss
+        lm_task: 1 # weighting for lm loss
     decoder:
         type: "lstm"
         embeddings:
