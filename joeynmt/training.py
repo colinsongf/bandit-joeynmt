@@ -79,6 +79,7 @@ class TrainManager:
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
+        self.rel_weights = config["data"].get("rel_weights")
         self.criterion = criterion
         self.normalization = train_config.get("normalization", "batch")
         self.steps = 0
@@ -207,6 +208,7 @@ class TrainManager:
         """
         train_iter = make_data_iter(train_data, batch_size=self.batch_size,
                                     train=True, shuffle=self.shuffle)
+        sum_weights = 0
         for epoch_no in range(self.epochs):
             self.logger.info("EPOCH {}".format(epoch_no + 1))
             self.model.train()
@@ -218,8 +220,11 @@ class TrainManager:
             for batch_no, batch in enumerate(iter(train_iter), 1):
                 # reactivate training
                 self.model.train()
-                batch = Batch(batch, self.pad_index, use_cuda=self.use_cuda)
+                batch = Batch(batch, self.pad_index, use_cuda=self.use_cuda, weight_baseline=sum_weights/max(self.steps, 1) if self.rel_weights else 0)
                 batch_loss = self._train_batch(batch)
+                if batch.weights is not None:
+                    sum_weights += torch.mean(batch.weights)
+
 
                 # log learning progress
                 if self.model.training and self.steps % self.logging_freq == 0:

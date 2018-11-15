@@ -8,6 +8,7 @@ data: # specify your data here
     #weights: "test/data/iwslt/train.en.kenlm.norm.sent.weights"
     weights: "test/data/iwslt/train.en.chunk.weights"
     log_weights: False
+    rel_weights: True
     dev: "test/data/iwslt/dev"  # development data for validation
     test: "test/data/iwslt/test"  # test data for testing final model; optional
     level: "word" # segmentation level: either "word", "bpe" or "char"

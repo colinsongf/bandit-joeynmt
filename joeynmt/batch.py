@@ -7,7 +7,7 @@ class Batch:
     Input is a batch from a torch text iterator.
     """
 
-    def __init__(self, torch_batch, pad_index, use_cuda=False):
+    def __init__(self, torch_batch, pad_index, use_cuda=False, weight_baseline=None):
         """
         Create a new joey batch from a torch batch.
         This batch extends torch text's batch attributes with src and trg
@@ -55,6 +55,8 @@ class Batch:
                         [1, self.trg.size(1)])
                 self.weights = torch.from_numpy(weights).float().to(
                     self.trg.device)
+                if weight_baseline is not None:
+                    self.weights -= weight_baseline
             else:
                 self.weights = None
 
