@@ -190,8 +190,7 @@ def load_lm_init(data_cfg, src_vocab, trg_vocab):
         tok_fun = lambda s: list(s)
     else:  # bpe or word, pre-tokenized
         tok_fun = lambda s: s.split()
-    src_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN,
-                           pad_token=PAD_TOKEN, tokenize=tok_fun,
+    src_field = data.Field(pad_token=PAD_TOKEN, tokenize=tok_fun,
                            batch_first=True, lower=lowercase,
                            unk_token=UNK_TOKEN,
                            include_lengths=True)
@@ -230,8 +229,7 @@ def load_data(cfg):
     else:  # bpe or word, pre-tokenized
         tok_fun = lambda s: s.split()
 
-    src_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN,
-                           pad_token=PAD_TOKEN, tokenize=tok_fun,
+    src_field = data.Field(pad_token=PAD_TOKEN, tokenize=tok_fun,
                            batch_first=True, lower=lowercase,
                            unk_token=UNK_TOKEN,
                            include_lengths=True)
