@@ -18,6 +18,7 @@ from joeynmt.constants import UNK_TOKEN, DEFAULT_UNK_ID, \
 from joeynmt.vocabulary import Vocabulary
 from joeynmt.plotting import plot_heatmap
 
+import sys
 
 def log_cfg(cfg, logger, prefix="cfg"):
     """
@@ -54,6 +55,7 @@ def build_vocab(field, max_size, min_freq, data, vocab_file=None):
     if vocab_file is not None:
         # load it from file
         vocab = Vocabulary(file=vocab_file)
+        vocab.add_tokens(specials)
     else:
         # create newly
         def filter_min(counter, min_freq):
@@ -86,6 +88,11 @@ def build_vocab(field, max_size, min_freq, data, vocab_file=None):
         assert vocab_tokens[DEFAULT_UNK_ID()] == UNK_TOKEN
         assert len(vocab_tokens) <= max_size + len(specials)
         vocab = Vocabulary(tokens=vocab_tokens)
+
+    # check for all except for UNK token whether they are OOVs
+    for s in specials[1:]:
+        assert not vocab.is_unk(s)
+
     return vocab
 
 
@@ -248,7 +255,7 @@ def load_data(cfg):
                                               <= max_sent_length and
                                               len(vars(x)['trg'])
                                               <= max_sent_length)
-    max_size = data_cfg.get("voc_limit", -1)
+    max_size = data_cfg.get("voc_limit", sys.maxsize)
     min_freq = data_cfg.get("voc_min_freq", 1)
     src_vocab_file = data_cfg.get("src_vocab", None)
     trg_vocab_file = data_cfg.get("trg_vocab", None)
@@ -369,9 +376,9 @@ def load_model_from_checkpoint(path, use_cuda=True):
     :return:
     """
     assert os.path.isfile(path), "Checkpoint %s not found" % path
-    checkpoint = torch.load(path, map_location='cuda' if use_cuda else 'cpu')
-    model_state = checkpoint["model_state"]
-    return model_state
+    model_checkpoint = torch.load(path,
+                                  map_location='cuda' if use_cuda else 'cpu')
+    return model_checkpoint
 
 
 def make_data_iter(dataset, batch_size, train=False, shuffle=False):

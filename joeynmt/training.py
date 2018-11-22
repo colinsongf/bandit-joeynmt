@@ -3,7 +3,6 @@ import argparse
 import logging
 import time
 import os
-import sys
 import numpy as np
 import shutil
 
@@ -15,7 +14,8 @@ from joeynmt.model import build_model
 
 from joeynmt.batch import Batch
 from joeynmt.helpers import log_data_info, load_data, \
-    load_config, log_cfg, store_attention_plots, make_data_iter
+    load_config, log_cfg, store_attention_plots, make_data_iter, \
+    load_model_from_checkpoint
 from joeynmt.prediction import validate_on_data
 
 
@@ -144,21 +144,21 @@ class TrainManager:
         :param path:
         :return:
         """
-        assert os.path.isfile(path), "Checkpoint %s not found" % path
-        checkpoint = torch.load(path)
+        model_checkpoint = load_model_from_checkpoint(
+            path=path, use_cuda=self.use_cuda)
 
         # restore model and optimizer parameters
-        self.model.load_state_dict(checkpoint['model_state'])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        self.model.load_state_dict(model_checkpoint["model_state"])
+        self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
 
-        if checkpoint["scheduler_state"] is not None:
-            self.scheduler.load_state_dict(checkpoint["scheduler_state"])
+        if model_checkpoint["scheduler_state"] is not None:
+            self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
 
         # restore counts
-        self.steps = checkpoint["steps"]
-        self.total_tokens = checkpoint["total_tokens"]
-        self.best_valid_score = checkpoint["best_valid_score"]
-        self.best_valid_iteration = checkpoint["best_valid_iteration"]
+        self.steps = model_checkpoint["steps"]
+        self.total_tokens = model_checkpoint["total_tokens"]
+        self.best_valid_score = model_checkpoint["best_valid_score"]
+        self.best_valid_iteration = model_checkpoint["best_valid_iteration"]
 
         # move parameters to cuda
         if self.use_cuda:
@@ -316,7 +316,7 @@ class TrainManager:
                         self.learning_rate_min))
                 break
         else:
-            self.logger.info('Training ended after {} epochs.'.format(epoch_no))
+            self.logger.info('Training ended after {} epochs.'.format(epoch_no+1))
         self.logger.info('Best validation result at step {}: {} {}.'.format(
             self.best_valid_iteration, self.best_valid_score, self.eval_metric))
 
@@ -446,13 +446,25 @@ def train(cfg_file):
         else:
             beam_size = 0
             beam_alpha = -1
-        validate_on_data(
+
+        score, loss, ppl, sources, sources_raw, references, hypotheses, hypotheses_raw, attention_scores  = validate_on_data(
             data=test_data, batch_size=trainer.batch_size,
             eval_metric=trainer.eval_metric, level=trainer.level,
             max_output_length=trainer.max_output_length,
             model=model, use_cuda=trainer.use_cuda, criterion=None,
             beam_size=beam_size, beam_alpha=beam_alpha)
+        
+        if "trg" in test_data.fields:
+            decoding_description = "Greedy decoding" if beam_size == 0 else "Beam search decoding with beam size = {} and alpha = {}".format(beam_size, beam_alpha)
+            trainer.logger.info("{:4s}: {} {} [{}]".format("Test data result", score, trainer.eval_metric, decoding_description))
+        else:
+            trainer.logger.info("No references given for {}.{} -> no evaluation.".format(cfg["data"]["test"],cfg["data"]["src"]))
 
+        output_path_set = "{}/{}.{}".format(trainer.model_dir,"test",cfg["data"]["trg"])
+        with open(output_path_set, mode="w", encoding="utf-8") as f:
+            for h in hypotheses:
+                f.write(h + "\n")
+        trainer.logger.info("Test translations saved to: {}".format(output_path_set))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('Joey-NMT')
