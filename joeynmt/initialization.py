@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import math
 from torch.nn.init import _calculate_fan_in_and_fan_out
+from joeynmt.deliberation import DeliberationModel
 
 def orthogonal_rnn_init_(cell, gain=1):
     """
@@ -70,7 +71,8 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
     bias_init_weight = float(cfg.get("bias_init_weight", 0.01))
 
     scale_src_emb = cfg["encoder"]["embeddings"].get("scale", False)
-    scale_trg_emb = cfg["decoder"]["embeddings"].get("scale", False)
+    decoders = [k for k in cfg.keys() if "decoder" in k]
+    scale_trg_emb = cfg[decoders[0]]["embeddings"].get("scale", False)
 
     def _parse_init(s, scale):
         scale = float(scale)
@@ -115,7 +117,11 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
                     if "encoder" in name:
                         n = 4 if isinstance(model.encoder.rnn, nn.LSTM) else 3
                     elif "decoder" in name:
-                        n = 4 if isinstance(model.decoder.rnn, nn.LSTM) else 3
+                        if isinstance(model, DeliberationModel):
+                            n = 4 if isinstance(model.decoder1.rnn, nn.LSTM) else 3
+                            n = 4 if isinstance(model.decoder2.rnn, nn.LSTM) else 3
+                        else:
+                            n = 4 if isinstance(model.decoder.rnn, nn.LSTM) else 3
                     xavier_uniform_n_(p.data, gain=gain, n=n)
                 else:
                     init_fn_(p)
@@ -139,11 +145,30 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
             if isinstance(model.encoder.rnn, nn.LSTM):
                 lstm_forget_gate_init_(model.encoder.rnn, lstm_forget_gate)
 
-        # decoder rnn orthogonal initialization & LSTM forget gate
-        if hasattr(model.decoder, "rnn"):
+        if isinstance(model, DeliberationModel):
+            # decoder1 rnn orthogonal initialization & LSTM forget gate
+            if hasattr(model.decoder1, "rnn"):
 
-            if orthogonal:
-                orthogonal_rnn_init_(model.decoder.rnn)
+                if orthogonal:
+                    orthogonal_rnn_init_(model.decoder1.rnn)
 
-            if isinstance(model.decoder.rnn, nn.LSTM):
-                lstm_forget_gate_init_(model.decoder.rnn, lstm_forget_gate)
+                if isinstance(model.decoder1.rnn, nn.LSTM):
+                    lstm_forget_gate_init_(model.decoder1.rnn, lstm_forget_gate)
+            # decoder2 rnn orthogonal initialization & LSTM forget gate
+            if hasattr(model.decoder2, "rnn"):
+
+                if orthogonal:
+                    orthogonal_rnn_init_(model.decoder2.rnn)
+
+                if isinstance(model.decoder2.rnn, nn.LSTM):
+                    lstm_forget_gate_init_(model.decoder2.rnn,
+                                           lstm_forget_gate)
+        else:
+            # decoder rnn orthogonal initialization & LSTM forget gate
+            if hasattr(model.decoder, "rnn"):
+
+                if orthogonal:
+                    orthogonal_rnn_init_(model.decoder.rnn)
+
+                if isinstance(model.decoder.rnn, nn.LSTM):
+                    lstm_forget_gate_init_(model.decoder.rnn, lstm_forget_gate)

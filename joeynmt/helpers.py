@@ -18,7 +18,9 @@ from joeynmt.constants import UNK_TOKEN, DEFAULT_UNK_ID, \
 from joeynmt.vocabulary import Vocabulary
 from joeynmt.plotting import plot_heatmap
 
+
 import sys
+
 
 def log_cfg(cfg, logger, prefix="cfg"):
     """

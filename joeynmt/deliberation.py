@@ -3,89 +3,32 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+
+from joeynmt.encoders import Encoder
+from joeynmt.decoders import Decoder
 from joeynmt.embeddings import Embeddings
-from joeynmt.encoders import Encoder, RecurrentEncoder
-from joeynmt.decoders import Decoder, RecurrentDecoder
-from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
-from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
+from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.helpers import arrays_to_sentences
-from joeynmt.deliberation import DeliberationModel
-from joeynmt.initialization import initialize_model
 
-def build_model(cfg: dict = None,
-                src_vocab: Vocabulary = None,
-                trg_vocab: Vocabulary = None):
-    src_padding_idx = src_vocab.stoi[PAD_TOKEN]
-    trg_padding_idx = trg_vocab.stoi[PAD_TOKEN]
-
-    src_embed = Embeddings(
-        **cfg["encoder"]["embeddings"], vocab_size=len(src_vocab),
-        padding_idx=src_padding_idx)
-
-    # if more 2 decoders specified: deliberation network
-    decoders = [k for k in cfg.keys() if "decoder" in k]
-
-    if cfg.get("tied_embeddings", False) \
-        and src_vocab.itos == trg_vocab.itos:
-        # share embeddings for src and trg
-        trg_embed = src_embed
-    else:
-        # embeddings for all decoders
-        trg_embed = Embeddings(
-            **cfg[decoders[0]]["embeddings"], vocab_size=len(trg_vocab),
-            padding_idx=trg_padding_idx)
-
-    encoder = RecurrentEncoder(**cfg["encoder"], vocab_size=len(src_vocab),
-                               emb_size=src_embed.embedding_dim)
-
-    if len(decoders) == 1:
-        # standard NMT
-        decoder = RecurrentDecoder(**decoders[0], encoder=encoder,
-                                   vocab_size=len(trg_vocab),
-                                   emb_size=trg_embed.embedding_dim)
-
-
-        model = Model(encoder=encoder, decoder=decoder,
-                      src_embed=src_embed, trg_embed=trg_embed,
-                      src_vocab=src_vocab, trg_vocab=trg_vocab)
-
-    elif len(decoders) == 2:
-        # deliberation network
-        print("DELIBERARTION")
-        decoder1 = RecurrentDecoder(**cfg[decoders[0]], encoder=encoder,
-                                   vocab_size=len(trg_vocab),
-                                   emb_size=trg_embed.embedding_dim)
-        decoder2 = RecurrentDecoder(**cfg[decoders[1]], encoder=encoder,
-                                   vocab_size=len(trg_vocab),
-                                   emb_size=trg_embed.embedding_dim)
-
-        model = DeliberationModel(encoder=encoder, decoder1=decoder1,
-                                  decoder2=decoder2, src_embed=src_embed,
-                                  trg_embed=trg_embed, src_vocab=src_vocab,
-                                  trg_vocab=trg_vocab)
-
-    # custom initialization of model parameters
-    initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
-
-    return model
-
-
-class Model(nn.Module):
+class DeliberationModel(nn.Module):
     """
-    Base Model class
+    Deliberation Model class
     """
 
     def __init__(self,
                  name: str = "my_model",
                  encoder: Encoder = None,
-                 decoder: Decoder = None,
+                 decoder1: Decoder = None,
+                 decoder2: Decoder = None,
                  src_embed: Embeddings = None,
                  trg_embed: Embeddings = None,
                  src_vocab: Vocabulary = None,
                  trg_vocab: Vocabulary = None):
         """
-        Create a new encoder-decoder model
+        Create a new encoder-decoder-decoder (deliberation) model
+        The first decoder attends the encoder,
+        the second attends the first decoder and the encoder
         :param name:
         :param encoder:
         :param decoder:
@@ -94,20 +37,21 @@ class Model(nn.Module):
         :param src_vocab:
         :param trg_vocab:
         """
-        super(Model, self).__init__()
+        super(DeliberationModel, self).__init__()
 
         self.name = name
         self.src_embed = src_embed
         self.trg_embed = trg_embed
         self.encoder = encoder
-        self.decoder = decoder
+        self.decoder1 = decoder1
+        self.decoder2 = decoder2
         self.src_vocab = src_vocab
         self.trg_vocab = trg_vocab
         self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
 
-    def forward(self, src, trg_input, src_mask, src_lengths):
+    def forward(self, src, trg_input, src_mask, src_lengths, trg_mask):
         """
         Take in and process masked src and target sequences.
         Use the encoder hidden state to initialize the decoder
@@ -122,10 +66,17 @@ class Model(nn.Module):
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
         unrol_steps = trg_input.size(1)
-        return self.decode(encoder_output=encoder_output,
+        dec1_outputs, dec1_hidden, dec1_att_probs, dec1_att_vectors = \
+            self.decode1(encoder_output=encoder_output,
                            encoder_hidden=encoder_hidden,
                            src_mask=src_mask, trg_input=trg_input,
-                           unrol_steps=unrol_steps), lm_output
+                           unrol_steps=unrol_steps)
+        # TODO
+        dec2_outputs = self.decode2(encoder_output=encoder_output, encoder_hidden=encoder_hidden,
+                     src_mask=src_mask, trg_input=trg_input, unrol_steps=unrol_steps,
+                     trg_mask=trg_mask, decoder1_output=dec1_outputs)
+
+        return dec2_outputs, lm_output
 
     def encode(self, src, src_length, src_mask):
         """
@@ -139,7 +90,7 @@ class Model(nn.Module):
         """
         return self.encoder(self.src_embed(src), src_length, src_mask)
 
-    def decode(self, encoder_output, encoder_hidden, src_mask, trg_input,
+    def decode1(self, encoder_output, encoder_hidden, src_mask, trg_input,
                unrol_steps, decoder_hidden=None):
         """
         Decode, given an encoded source sentence.
@@ -153,9 +104,21 @@ class Model(nn.Module):
         :param decoder_hidden:
         :return: decoder outputs
         """
-        return self.decoder(trg_embed=self.trg_embed(trg_input),
+        return self.decoder1(trg_embed=self.trg_embed(trg_input),
                             encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
+                            src_mask=src_mask,
+                            unrol_steps=unrol_steps,
+                            hidden=decoder_hidden)
+
+    def decode2(self, encoder_output, encoder_hidden, src_mask, trg_input,
+               unrol_steps, decoder1_output, trg_mask, decoder_hidden=None):
+        # TODO
+        return self.decoder2(trg_embed=self.trg_embed(trg_input),
+                            encoder_output=encoder_output,
+                            encoder_hidden=encoder_hidden,
+                            decoder1_output=decoder1_output,
+                            trg_mask=trg_mask,
                             src_mask=src_mask,
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
