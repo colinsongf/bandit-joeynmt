@@ -243,9 +243,15 @@ class RecurrentDeliberationDecoder(Decoder):
         Create a recurrent deliberation decoder.
         In contrast to the standard 1st decoder, this one receives the output
         from the 1st decoder as input as well as the encoder outputs and has a
-        joint attention over both
+        joint attention over both.
+
+        input to the attention: [hidden state of previous decoder, predicted word]
+        input to rnn: [previous prediction, source context vector, target context vector], prev state
+        att vector feeding: add target context to it
+
         If `bridge` is True, the decoder hidden states are initialized from a
         projection of the encoder states, else they are initialized with zeros.
+
         :param type:
         :param emb_size:
         :param hidden_size:
@@ -269,14 +275,15 @@ class RecurrentDeliberationDecoder(Decoder):
 
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
-        # TODO adapt
         self.input_feeding = input_feeding
         if self.input_feeding:
             # combine hidden state and attentional context before feeding to rnn
-            self.att_vector_layer = nn.Linear(
+            self.src_att_vector_layer = nn.Linear(
                 hidden_size + encoder.output_size, hidden_size, bias=True)
             self.rnn_input_size = emb_size + hidden_size
-        else:
+            self.d1_att_vector_layer = nn.Linear(
+                hidden_size + hidden_size + emb_size, hidden_size, bias=True)
+        else: # TODO does this make sense?
             # just feed prev word embedding
             self.rnn_input_size = emb_size
 
@@ -289,12 +296,17 @@ class RecurrentDeliberationDecoder(Decoder):
         self.output_size = vocab_size
 
         if attention == "bahdanau":
-            self.attention = BahdanauAttention(hidden_size=hidden_size,
+            self.src_attention = BahdanauAttention(hidden_size=hidden_size,
                                                key_size=encoder.output_size,
                                                query_size=hidden_size)
+            self.d1_attention = BahdanauAttention(hidden_size=hidden_size,
+                                               key_size=hidden_size+emb_size, #encoder.output_size,
+                                               query_size=hidden_size)
         elif attention == "luong":
-            self.attention = LuongAttention(hidden_size=hidden_size,
+            self.src_attention = LuongAttention(hidden_size=hidden_size,
                                             key_size=encoder.output_size)
+            self.d1_attention = LuongAttention(hidden_size=hidden_size,
+                                            key_size=hidden_size+emb_size) #encoder.output_size)
         else:
             raise ValueError("Unknown attention mechanism: %s" % attention)
 
@@ -309,7 +321,8 @@ class RecurrentDeliberationDecoder(Decoder):
 
     def _forward_step(self,
                       prev_embed: Tensor = None,
-                      prev_att_vector: Tensor = None,  # context or att vector
+                      prev_src_att_vector: Tensor = None,  # context or att vector
+                      prev_d1_att_vector: Tensor = None,
                       encoder_output: Tensor = None,
                       src_mask: Tensor = None,
                       hidden: Tensor = None):
@@ -330,6 +343,7 @@ class RecurrentDeliberationDecoder(Decoder):
         else:
             rnn_input = prev_embed
 
+        # TODO adapt
         rnn_input = self.rnn_input_dropout(rnn_input)
 
         # rnn_input: batch x 1 x emb+2*enc_size
@@ -344,8 +358,10 @@ class RecurrentDeliberationDecoder(Decoder):
         # compute context vector using attention mechanism
         # only use last layer for attention mechanism
         # key projections are pre-computed
-        context, att_probs = self.attention(
-            query=query, keys=encoder_output, mask=src_mask)
+        src_context, src_att_probs = self.src_attention(
+            query=query, values=encoder_output, mask=src_mask)
+        # TODO is there a target mask??
+        d1_context, d1_att_probs = self.d1_attention(query=query, values=TODO, mask=TODO)
 
         # return attention vector
         # combine context with decoder hidden state before prediction
@@ -353,22 +369,31 @@ class RecurrentDeliberationDecoder(Decoder):
         att_vector_input = self.hidden_dropout(att_vector_input)
 
         # batch x 1 x 2*enc_size+hidden_size
-        att_vector = torch.tanh(self.att_vector_layer(att_vector_input))
+        # TODO same for both?
+        src_att_vector = torch.tanh(self.src_att_vector_layer(att_vector_input))
+        d1_att_vector = torch.tanh(self.d1_att_vector_layer(att_vector_input))
 
         # output: batch x 1 x dec_size
-        return att_vector, hidden, att_probs
+        return prev_src_att_vector, prev_d1_att_vector, hidden, src_att_prob,\
+            d1_att_prob
 
-    def forward(self, trg_embed, encoder_output, encoder_hidden,
-                src_mask, unrol_steps, hidden=None, prev_att_vector=None):
+    def forward(self, trg_embed, d1_predictions, d1_states,
+                encoder_output, encoder_hidden,
+                src_mask, unrol_steps, hidden=None, prev_src_att_vector=None,
+                prev_d1_att_vector=None):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
+
         :param trg_embed:
+        :param d1_predictions: predictions of the previous decoder (embedded)
+        :param d1_states: hidden states of the previous decoder
         :param encoder_output:
         :param encoder_hidden:
         :param src_mask:
         :param unrol_steps:
         :param hidden:
-        :param prev_att_vector:
+        :param prev_src_att_vector:
+        :param prev_d1_att_vector:
         :return:
         """
 
@@ -379,39 +404,60 @@ class RecurrentDeliberationDecoder(Decoder):
         # pre-compute projected encoder outputs
         # (the "keys" for the attention mechanism)
         # this is only done for efficiency
-        if hasattr(self.attention, "compute_proj_keys"):
-            self.attention.compute_proj_keys(encoder_output)
+        if hasattr(self.src_attention, "compute_proj_keys"):
+            self.src_attention.compute_proj_keys(encoder_output)
+
+        # attention to previous decoder states and predictions
+        if hasattr(self.d1_attention, "compute_proj_keys"):
+            print("d1 predictions", d1_predictions.shape)
+            print("d1 states", d1_states.shape)
+            att_keys = torch.cat([d1_predictions, d1_states], dim=1)
+            self.d1_attention.compute_proj_keys(att_keys)
 
         # here we store all intermediate attention vectors (used for prediction)
-        att_vectors = []
-        att_probs = []
+        src_att_vectors = []
+        src_att_probs = []
+        d1_att_vectors = []
+        d1_att_probs = []
 
-        # FIXME support not-input feeding
         batch_size = encoder_output.size(0)
 
-        if prev_att_vector is None:
+        if prev_src_att_vector is None:
             with torch.no_grad():
-                prev_att_vector = encoder_output.new_zeros(
+                prev_src_att_vector = encoder_output.new_zeros(
+                    [batch_size, 1, self.hidden_size])
+        if prev_d1_att_vector is None:
+            with torch.no_grad():
+                prev_d1_att_vector = encoder_output.new_zeros(
                     [batch_size, 1, self.hidden_size])
 
         # unroll the decoder RN N for max_len steps
         for i in range(unrol_steps):
             prev_embed = trg_embed[:, i].unsqueeze(1)  # batch, 1, emb
-            prev_att_vector, hidden, att_prob = self._forward_step(
+            prev_src_att_vector, prev_d1_att_vector, hidden, src_att_prob,\
+            d1_att_prob = self._forward_step(
                 prev_embed=prev_embed,
-                prev_att_vector=prev_att_vector,
+                prev_src_att_vector=prev_src_att_vector,
+                prev_d1_att_vector=prev_d1_att_vector,
                 encoder_output=encoder_output,
                 src_mask=src_mask,
                 hidden=hidden)
-            att_vectors.append(prev_att_vector)
-            att_probs.append(att_prob)
+            src_att_vectors.append(prev_src_att_vector)
+            src_att_probs.append(src_att_prob)
+            d1_att_vectors.append(prev_d1_att_vector)
+            d1_att_probs.append(d1_att_prob)
 
-        att_vectors = torch.cat(att_vectors, dim=1)
-        att_probs = torch.cat(att_probs, dim=1)
+        src_att_vectors = torch.cat(src_att_vectors, dim=1)
+        src_att_probs = torch.cat(src_att_probs, dim=1)
+        d1_att_vectors = torch.cat(d1_att_vectors, dim=1)
+        d1_att_probs = torch.cat(d1_att_probs, dim=1)
+
+        # TODO correct?
+        att_vectors = torch.cat([src_att_vectors, d1_att_vectors], dim=-1)
         # att_probs: batch, max_len, src_length
         outputs = self.output_layer(att_vectors)
         # outputs: batch, max_len, vocab_size
-        return outputs, hidden, att_probs, att_vectors
+        return outputs, hidden, src_att_probs, d1_att_probs, src_att_vectors, d1_att_vectors
 
     def init_hidden(self, encoder_final):
         """
