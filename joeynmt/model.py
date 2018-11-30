@@ -54,7 +54,7 @@ def build_model(cfg: dict = None,
 
     elif len(decoders) == 2:
         # deliberation network
-        print("DELIBERARTION")
+        print("DELIBERATION NETWORK")
         decoder1 = RecurrentDecoder(**cfg[decoders[0]], encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
