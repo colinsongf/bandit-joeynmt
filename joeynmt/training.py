@@ -17,6 +17,7 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter, \
     load_model_from_checkpoint
 from joeynmt.prediction import validate_on_data
+from joeynmt.deliberation import DeliberationModel
 
 
 class TrainManager:
@@ -40,13 +41,40 @@ class TrainManager:
             raise NotImplementedError("Loss is not implemented. Only xent.")
         learning_rate = train_config.get("learning_rate", 3.0e-4)
         weight_decay = train_config.get("weight_decay", 0)
-        if train_config["optimizer"].lower() == "adam":
-            self.optimizer = torch.optim.Adam(
-                model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+        if isinstance(self.model, DeliberationModel):
+            # separate optimizers for two decoders, shared parameters are included in both
+            # decoder1 parameters and encoder parameters
+            param_set1 = [p for name, p in model.named_parameters() if "decoder2" not in name]
+            # decoder2 parameters (trg embedding is shared) and encoder parameters
+            param_set2 = [p for name, p in model.named_parameters() if "decoder1" not in name]
+            param_set1_names = [name for name, p in model.named_parameters() if
+                          "decoder2" not in name]
+            param_set2_names = [name for name, p in model.named_parameters() if
+                          "decoder1" not in name]
+            print("Params1", param_set1_names)
+            print("Params2", param_set2_names)
+            if train_config["optimizer"].lower() == "adam":
+                self.optimizer1 = torch.optim.Adam(
+                    params=param_set1, weight_decay=weight_decay,
+                    lr=learning_rate)
+                self.optimizer2 = torch.optim.Adam(
+                    params=param_set2, weight_decay=weight_decay,
+                    lr=learning_rate)
+            else:
+                # default
+                self.optimizer1 = torch.optim.SGD(
+                    params=param_set1, weight_decay=weight_decay, lr=learning_rate)
+                self.optimizer2 = torch.optim.SGD(
+                    params=param_set2, weight_decay=weight_decay, lr=learning_rate)
         else:
-            # default
-            self.optimizer = torch.optim.SGD(
-                model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+            if train_config["optimizer"].lower() == "adam":
+                self.optimizer = torch.optim.Adam(
+                    model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+            else:
+                # default
+                self.optimizer = torch.optim.SGD(
+                    model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+
         self.schedule_metric = train_config.get("schedule_metric",
                                                 "eval_metric")
         if self.schedule_metric == "eval_metric":
@@ -60,22 +88,57 @@ class TrainManager:
                 train_config["scheduling"]:
             if train_config["scheduling"].lower() == "plateau":
                 # learning rate scheduler
-                self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer=self.optimizer,
-                    mode=scheduler_mode,
-                    verbose=True,
-                    threshold_mode='abs',
-                    factor=train_config.get("decrease_factor", 0.1),
-                    patience=train_config.get("patience", 10))
+                # TODO also multiple schedulers for model parts
+                if isinstance(self.model, DeliberationModel):
+                    self.scheduler1 = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=self.optimizer1,
+                        mode=scheduler_mode,
+                        verbose=True,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
+                    self.scheduler2 = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=self.optimizer2,
+                        mode=scheduler_mode,
+                        verbose=True,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=self.optimizer,
+                        mode=scheduler_mode,
+                        verbose=True,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
             elif train_config["scheduling"].lower() == "decaying":
-                self.scheduler = torch.optim.lr_scheduler.StepLR(
-                    optimizer=self.optimizer,
-                    step_size=train_config.get("decaying_step_size", 10))
+                if isinstance(self.model, DeliberationModel):
+                    self.scheduler1 = torch.optim.lr_scheduler.StepLR(
+                        optimizer=self.optimizer1,
+                        step_size=train_config.get("decaying_step_size", 10))
+                    self.scheduler2 = torch.optim.lr_scheduler.StepLR(
+                        optimizer=self.optimizer2,
+                        step_size=train_config.get("decaying_step_size", 10))
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.StepLR(
+                        optimizer=self.optimizer,
+                        step_size=train_config.get("decaying_step_size", 10))
             elif train_config["scheduling"].lower() == "exponential":
-                self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                    optimizer=self.optimizer,
-                    gamma=train_config.get("decrease_factor", 0.99)
-                )
+                if isinstance(self.model, DeliberationModel):
+                    self.scheduler1 = torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=self.optimizer1,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    )
+                    self.scheduler2 = torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=self.optimizer2,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    )
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=self.optimizer,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    )
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
@@ -85,8 +148,8 @@ class TrainManager:
         # stop training if this flag is True by reaching learning rate minimum
         self.stop = False
         self.total_tokens = 0
-        self.best_valid_score = 0
-        self.best_valid_iteration = 0
+        self.best_ckpt_score = 0
+        self.best_ckpt_iteration = 0
         self.max_output_length = train_config.get("max_output_length", None)
         self.overwrite = train_config.get("overwrite", False)
         self.model_dir = self._make_model_dir(train_config["model_dir"])
@@ -116,6 +179,8 @@ class TrainManager:
             "you can only specify either clip_grad_val or clip_grad_norm"
 
         if "load_model" in train_config.keys():
+            # TODO deliberation: load decoders params for both decoders
+            # TODO pre-trained model can have 1 or 2 decoders (either base or delib model)
             model_load_path = train_config["load_model"]
             self.logger.info("Loading model from {}".format(model_load_path))
             self.load_checkpoint(model_load_path)
@@ -129,13 +194,21 @@ class TrainManager:
         state = {
             "steps": self.steps,
             "total_tokens": self.total_tokens,
-            "best_valid_score": self.best_valid_score,
-            "best_valid_iteration": self.best_valid_iteration,
+            "best_ckpt_score": self.best_ckpt_score,
+            "best_ckpt_iteration": self.best_ckpt_iteration,
             "model_state": self.model.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
-            "scheduler_state": self.scheduler.state_dict() if \
-            self.scheduler is not None else None,
         }
+        if isinstance(self.model, DeliberationModel):
+            state["optimizer1_state"] = self.optimizer1.state_dict()
+            state["scheduler1_state"] = self.scheduler1.state_dict() if \
+                self.scheduler1 is not None else None
+            state["optimizer2_state"] = self.optimizer2.state_dict()
+            state["scheduler2_state"] = self.scheduler2.state_dict() if \
+                self.scheduler2 is not None else None
+        else:
+            state["optimizer_state"] = self.optimizer.state_dict()
+            state["scheduler_state"] =  self.scheduler.state_dict() if \
+            self.scheduler is not None else None
         torch.save(state, model_path)
 
     def load_checkpoint(self, path):
@@ -148,17 +221,104 @@ class TrainManager:
             path=path, use_cuda=self.use_cuda)
 
         # restore model and optimizer parameters
-        self.model.load_state_dict(model_checkpoint["model_state"])
-        self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
+        param_dict = model_checkpoint["model_state"]
+        if isinstance(self.model, DeliberationModel):
+            if "decoder1_state" in model_checkpoint.keys() and \
+                            "decoder2_state" in model_checkpoint.keys():
+                # previous model was also a deliberation network
+                self.logger.info("Initializing decoders from pre-trained "
+                                 "decoders.")
+                self.model.load_state_dict(model_checkpoint["model_state"])
+            else:
+                self.logger.info("Initializing both decoders from "
+                                 "standard pre-trained decoder.")
+                new_param_dict = {}
+                for name, param in param_dict.items():
+                    if "decoder" in name:
+                        name_suffix = name.split("decoder.")[1]
+                        new_name1 = "decoder1." + name_suffix
+                        new_name2 = "decoder2." + name_suffix
+                        if not "att" in name:
+                            new_param_dict[new_name1] = param
+                            new_param_dict[new_name2] = param
+                        else:
+                            # first decoder loads pre-trained attention
+                            new_param_dict[new_name1] = param
+                            # second decoder: same src attention as first decoder
+                            if "attention" in name:
+                                new_param_dict[new_name2.replace("attention", "src_attention")] = param
+                    else:
+                        new_param_dict[name] = param
 
-        if model_checkpoint["scheduler_state"] is not None:
-            self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
+                # TODO other initialization?
+                # attention vector layer of 2nd decoder and attention between decoders have be initialized randomly (different shape)
+                new_param_dict["decoder2.comb_att_vector_layer.weight"] = torch.rand_like(self.model.decoder2.comb_att_vector_layer.weight).uniform_(
+                                    -0.1, 0.1)
+                new_param_dict["decoder2.comb_att_vector_layer.bias"] = torch.rand_like(self.model.decoder2.comb_att_vector_layer.bias).uniform_(
+                                    -0.1, 0.1)
+                new_param_dict["decoder2.d1_attention.key_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.key_layer.weight).uniform_(-0.1, 0.1)
+                new_param_dict["decoder2.d1_attention.query_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.query_layer.weight).uniform_(-0.1, 0.1)
+                new_param_dict["decoder2.d1_attention.energy_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.energy_layer.weight).uniform_(-0.1, 0.1)
+
+                self.model.load_state_dict(new_param_dict)
+        else:
+            self.model.load_state_dict(param_dict)
+
+        if isinstance(self.model, DeliberationModel):
+            if "optimizer1_state" in model_checkpoint.keys() and \
+                            "optimizer2_state" in model_checkpoint.keys():
+                self.logger.info("Loading optimizer from 2 decoders.")
+                # loaded model is also a deliberation network
+                self.optimizer1.load_state_dict(
+                    model_checkpoint["optimizer1_state"])
+                self.optimizer2.load_state_dict(
+                    model_checkpoint["optimizer2_state"])
+
+            #elif "optimizer_state" in model_checkpoint.keys():
+            #    self.logger.info("Loading optimizer from 1 decoder.")
+            #    # TODO not possible in PyTorch, see:
+            #    # https://discuss.pytorch.org/t/load-optimizer-for-partial-parameters/2617
+            #    # loaded model only had one decoder, optimizer, scheduler
+            #    #print(model_checkpoint["optimizer_state"]["param_groups"])
+            #    self.optimizer1.load_state_dict(
+            #        model_checkpoint["optimizer_state"])
+            #    self.optimizer2.load_state_dict(
+            #        model_checkpoint["optimizer_state"])
+            else:
+                self.logger.warning("No optimizer loaded.")
+
+            if "scheduler1_state" in model_checkpoint.keys() and \
+                            "scheduler2_state" in model_checkpoint.keys():
+                # loaded model is also a deliberation network
+                self.scheduler1.load_state_dict(
+                    model_checkpoint["scheduler1_state"])
+                self.scheduler2.load_state_dict(
+                    model_checkpoint["scheduler2_state"])
+
+            elif "scheduler_state" in model_checkpoint.keys():
+                # loaded model only had one decoder, optimizer, scheduler
+                self.scheduler1.load_state_dict(
+                    model_checkpoint["scheduler_state"])
+                self.scheduler2.load_state_dict(
+                    model_checkpoint["scheduler_state"])
+            else:
+                self.logger.warning("No scheduler loaded.")
+
+        else:
+            self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
+
+            if model_checkpoint["scheduler_state"] is not None:
+                self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
 
         # restore counts
         self.steps = model_checkpoint["steps"]
         self.total_tokens = model_checkpoint["total_tokens"]
-        self.best_valid_score = model_checkpoint["best_valid_score"]
-        self.best_valid_iteration = model_checkpoint["best_valid_iteration"]
+        try:
+            self.best_ckpt_score = model_checkpoint["best_ckpt_score"]
+            self.best_ckpt_iteration = model_checkpoint["best_ckpt_iteration"]
+        except KeyError:  # previous versions
+            self.best_ckpt_score = model_checkpoint["best_valid_score"]
+            self.best_ckpt_iteration = model_checkpoint["best_valid_iteration"]
 
         # move parameters to cuda
         if self.use_cuda:
@@ -247,9 +407,9 @@ class TrainManager:
                         max_output_length=self.max_output_length,
                         criterion=self.criterion)
 
-                    if valid_score > self.best_valid_score:
-                        self.best_valid_score = valid_score
-                        self.best_valid_iteration = self.steps
+                    if valid_score > self.best_ckpt_score:
+                        self.best_ckpt_score = valid_score
+                        self.best_ckpt_iteration = self.steps
                         self.logger.info('Hooray! New best validation result!')
                         self.save_checkpoint()
 
@@ -263,14 +423,21 @@ class TrainManager:
                     else:
                         # schedule based on evaluation score
                         schedule_score = valid_score
-                    if self.scheduler is not None:
-                        self.scheduler.step(schedule_score)
+
+                    if isinstance(self.model, DeliberationModel):
+                        if self.scheduler1 is not None:
+                            self.scheduler1.step(schedule_score)
+                        if self.scheduler2 is not None:
+                            self.scheduler2.step(schedule_score)
+                    else:
+                        if self.scheduler is not None:
+                            self.scheduler.step(schedule_score)
 
                     # append to validation report
                     self._add_report(
                         valid_score=valid_score, valid_loss=valid_loss,
                         valid_ppl=valid_ppl, eval_metric=self.eval_metric,
-                        new_best=self.steps == self.best_valid_iteration)
+                        new_best=self.steps == self.best_ckpt_iteration)
 
                     # always print first x sentences
                     for p in range(self.print_valid_sents):
@@ -318,7 +485,7 @@ class TrainManager:
         else:
             self.logger.info('Training ended after {} epochs.'.format(epoch_no+1))
         self.logger.info('Best validation result at step {}: {} {}.'.format(
-            self.best_valid_iteration, self.best_valid_score, self.eval_metric))
+            self.best_ckpt_iteration, self.best_ckpt_score, self.eval_metric))
 
     def _train_batch(self, batch):
         """
@@ -338,7 +505,8 @@ class TrainManager:
             raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
         norm_batch_loss = batch_loss.sum() / normalizer
-        # compute gradient
+
+        # compute gradients
         norm_batch_loss.backward()
 
         if self.clip_grad_fun is not None:
@@ -346,8 +514,15 @@ class TrainManager:
             self.clip_grad_fun(params=self.model.parameters())
 
         # make gradient step
-        self.optimizer.step()
-        self.optimizer.zero_grad()
+        if isinstance(self.model, DeliberationModel):
+            self.optimizer1.step()
+            self.optimizer1.zero_grad()
+            self.optimizer2.step()
+            self.optimizer2.zero_grad()
+
+        else:
+            self.optimizer.step()
+            self.optimizer.zero_grad()
 
         # increment step and token counter
         self.steps += 1
@@ -366,17 +541,28 @@ class TrainManager:
         :return:
         """
         current_lr = -1
-        # ignores other param groups for now
-        for param_group in self.optimizer.param_groups:
-            current_lr = param_group['lr']
+        if isinstance(self.model, DeliberationModel):
+            # ignores other param groups for now
+            for param_group in self.optimizer1.param_groups:
+                current_lr1 = param_group['lr']
+            for param_group in self.optimizer2.param_groups:
+                current_lr2 = param_group['lr']
+            if current_lr1 < self.learning_rate_min and current_lr2 < self.learning_rate_min:
+                self.stop = True
+            current_lr = "{} | {}".format(current_lr1, current_lr2)
 
-        if current_lr < self.learning_rate_min:
-            self.stop = True
+        else:
+            # ignores other param groups for now
+            for param_group in self.optimizer.param_groups:
+                current_lr = param_group['lr']
+
+            if current_lr < self.learning_rate_min:
+                self.stop = True
 
         with open(self.valid_report_file, 'a') as opened_file:
             opened_file.write(
                 "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
-                "LR: {:.8f}\t{}\n".format(
+                "LR: {}\t{}\n".format(
                     self.steps, valid_loss, valid_ppl, eval_metric,
                     valid_score, current_lr, "*" if new_best else ""))
 

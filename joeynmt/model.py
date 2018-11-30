@@ -5,7 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 from joeynmt.embeddings import Embeddings
 from joeynmt.encoders import Encoder, RecurrentEncoder
-from joeynmt.decoders import Decoder, RecurrentDecoder
+from joeynmt.decoders import Decoder, RecurrentDecoder, \
+    RecurrentDeliberationDecoder
 from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
@@ -41,7 +42,8 @@ def build_model(cfg: dict = None,
 
     if len(decoders) == 1:
         # standard NMT
-        decoder = RecurrentDecoder(**decoders[0], encoder=encoder,
+        d = cfg[decoders[0]]
+        decoder = RecurrentDecoder(**d, encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
 
@@ -56,7 +58,7 @@ def build_model(cfg: dict = None,
         decoder1 = RecurrentDecoder(**cfg[decoders[0]], encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
-        decoder2 = RecurrentDecoder(**cfg[decoders[1]], encoder=encoder,
+        decoder2 = RecurrentDeliberationDecoder(**cfg[decoders[1]], encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
 
