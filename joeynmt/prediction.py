@@ -37,7 +37,6 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
     model.eval()
 
     if isinstance(model, DeliberationModel):
-        # TODO validate both models, dec1 and dec2
         # don't track gradients during validation
         with torch.no_grad():
             all_outputs1 = []
@@ -122,14 +121,13 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                 assert len(valid_hypotheses1) == len(valid_references) == len(valid_hypotheses2)
 
                 current_valid_score = 0
+                current_aux_valid_score = 0
                 if eval_metric.lower() == 'bleu':
                     # this version does not use any tokenization
                     current_valid_score = bleu(valid_hypotheses2,
                                                valid_references)
                     current_aux_valid_score = bleu(valid_hypotheses1,
                                                valid_references)
-                    print("D1:", current_valid_score)
-                    print("D2:", current_aux_valid_score)
                 elif eval_metric.lower() == 'chrf':
                     current_valid_score = chrf(valid_hypotheses2,
                                                valid_references)
@@ -150,12 +148,10 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             else:
                 current_valid_score = -1
 
-        # TODO for now only return quality of 2nd decoder for printing
-        # TODO add scores for d1 as well
-        return current_valid_score, valid_loss, valid_ppl, valid_sources, \
-               valid_sources_raw, valid_references, valid_hypotheses2, \
-               decoded_valid2, \
-               valid_attention_scores
+        return (current_valid_score, current_aux_valid_score), valid_loss, valid_ppl, valid_sources, \
+               valid_sources_raw, valid_references, (valid_hypotheses1, valid_hypotheses2), \
+               (decoded_valid1, decoded_valid2), \
+               (valid_attention_scores, valid_src_attention_scores, valid_d1_attention_scores)
 
     else:
         # don't track gradients during validation
@@ -307,38 +303,43 @@ def test(cfg_file,
 
     for data_set_name, data_set in data_to_predict.items():
 
-        score, loss, ppl, sources, sources_raw, references, hypotheses, \
-        hypotheses_raw, attention_scores = validate_on_data(
-            model, data=data_set, batch_size=batch_size, level=level,
-            max_output_length=max_output_length, eval_metric=eval_metric,
-            use_cuda=use_cuda, criterion=None, beam_size=beam_size,
-            beam_alpha=beam_alpha)
+        if isinstance(model, DeliberationModel):
+            # TODO
+            pass
 
-        if "trg" in data_set.fields:
-            decoding_description = "Greedy decoding" if beam_size == 0 else \
-                "Beam search decoding with beam size = {} and alpha = {}".format(
-                    beam_size, beam_alpha)
-            print("{:4s} {}: {} [{}]".format(
-                data_set_name, eval_metric, score, decoding_description))
         else:
-            print("No references given for {} -> no evaluation.".format(
-                data_set_name))
+            score, loss, ppl, sources, sources_raw, references, hypotheses, \
+            hypotheses_raw, attention_scores = validate_on_data(
+                model, data=data_set, batch_size=batch_size, level=level,
+                max_output_length=max_output_length, eval_metric=eval_metric,
+                use_cuda=use_cuda, criterion=None, beam_size=beam_size,
+                beam_alpha=beam_alpha)
 
-        if attention_scores is not None and save_attention:
-            attention_path = "{}/{}.{}.att".format(dir, data_set_name, step)
-            print("Attention plots saved to: {}.xx".format(attention_path))
-            store_attention_plots(attentions=attention_scores,
-                                  targets=hypotheses_raw,
-                                  sources=[s for s in data_set.src],
-                                  idx=range(len(hypotheses)),
-                                  output_prefix=attention_path)
+            if "trg" in data_set.fields:
+                decoding_description = "Greedy decoding" if beam_size == 0 else \
+                    "Beam search decoding with beam size = {} and alpha = {}".format(
+                        beam_size, beam_alpha)
+                print("{:4s} {}: {} [{}]".format(
+                    data_set_name, eval_metric, score, decoding_description))
+            else:
+                print("No references given for {} -> no evaluation.".format(
+                    data_set_name))
 
-        if output_path is not None:
-            output_path_set = "{}.{}".format(output_path, data_set_name)
-            with open(output_path_set, mode="w", encoding="utf-8") as f:
-                for h in hypotheses:
-                    f.write(h + "\n")
-            print("Translations saved to: {}".format(output_path_set))
+            if attention_scores is not None and save_attention:
+                attention_path = "{}/{}.{}.att".format(dir, data_set_name, step)
+                print("Attention plots saved to: {}.xx".format(attention_path))
+                store_attention_plots(attentions=attention_scores,
+                                      targets=hypotheses_raw,
+                                      sources=[s for s in data_set.src],
+                                      idx=range(len(hypotheses)),
+                                      output_prefix=attention_path)
+
+            if output_path is not None:
+                output_path_set = "{}.{}".format(output_path, data_set_name)
+                with open(output_path_set, mode="w", encoding="utf-8") as f:
+                    for h in hypotheses:
+                        f.write(h + "\n")
+                print("Translations saved to: {}".format(output_path_set))
 
 def lm(cfg_file, ckpt, size, output_path):
     """

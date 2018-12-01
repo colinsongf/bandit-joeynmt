@@ -396,17 +396,29 @@ class TrainManager:
                 if self.steps % self.validation_freq == 0:
                     valid_start_time = time.time()
 
-                    valid_score, valid_loss, valid_ppl, valid_sources, \
-                    valid_sources_raw, valid_references, valid_hypotheses, \
-                    valid_hypotheses_raw, valid_attention_scores = \
-                        validate_on_data(
-                        batch_size=self.batch_size, data=valid_data,
-                        eval_metric=self.eval_metric,
-                        level=self.level, model=self.model,
-                        use_cuda=self.use_cuda,
-                        max_output_length=self.max_output_length,
-                        criterion=self.criterion)
-
+                    valid_result = validate_on_data(
+                            batch_size=self.batch_size, data=valid_data,
+                            eval_metric=self.eval_metric,
+                            level=self.level, model=self.model,
+                            use_cuda=self.use_cuda,
+                            max_output_length=self.max_output_length,
+                            criterion=self.criterion)
+                    if isinstance(self.model, DeliberationModel):
+                        (valid_score,
+                         aux_valid_score), valid_loss, valid_ppl, valid_sources, \
+                         valid_sources_raw, valid_references, (
+                         valid_hypotheses1, valid_hypotheses2), \
+                         (valid_hypotheses_raw1, valid_hypotheses_raw2), \
+                         (valid_attention_scores, valid_src_attention_scores,
+                         valid_d1_attention_scores) = valid_result
+                        valid_hypotheses = valid_hypotheses2
+                        valid_hypotheses_raw = valid_hypotheses_raw2
+                        # TODO pass attention scores on to later code
+                    else:
+                        valid_score, valid_loss, valid_ppl, valid_sources, \
+                        valid_sources_raw, valid_references, valid_hypotheses, \
+                        valid_hypotheses_raw, valid_attention_scores = valid_result
+                        aux_valid_score = None
                     if valid_score > self.best_ckpt_score:
                         self.best_ckpt_score = valid_score
                         self.best_ckpt_iteration = self.steps
@@ -437,7 +449,8 @@ class TrainManager:
                     self._add_report(
                         valid_score=valid_score, valid_loss=valid_loss,
                         valid_ppl=valid_ppl, eval_metric=self.eval_metric,
-                        new_best=self.steps == self.best_ckpt_iteration)
+                        new_best=self.steps == self.best_ckpt_iteration,
+                        aux_valid_score=aux_valid_score)
 
                     # always print first x sentences
                     for p in range(self.print_valid_sents):
@@ -452,6 +465,13 @@ class TrainManager:
                             valid_hypotheses_raw[p]))
                         self.logger.debug("\tHypothesis: {}".format(
                             valid_hypotheses[p]))
+                        if isinstance(self.model, DeliberationModel):
+                            self.logger.debug("\tRaw hypothesis Dec1: {}".format(
+                                valid_hypotheses_raw1[p]))
+                            self.logger.debug("\tHypothesis Dec1: {}".format(
+                            valid_hypotheses1[p]))
+
+
                     valid_duration = time.time() - valid_start_time
                     total_valid_duration += valid_duration
                     self.logger.info(
@@ -459,7 +479,11 @@ class TrainManager:
                         'loss: {}, ppl: {}, duration: {:.4f}s'.format(
                             epoch_no+1, self.steps, self.eval_metric,
                             valid_score, valid_loss, valid_ppl, valid_duration))
-
+                    if isinstance(self.model, DeliberationModel):
+                        self.logger.info('D1 Validation result at epoch {}, '
+                                         'step {}: {}: {}'.format(
+                            epoch_no+1, self.steps, self.eval_metric,
+                            aux_valid_score))
                     # store validation set outputs
                     self.store_outputs(valid_hypotheses)
 
@@ -530,7 +554,7 @@ class TrainManager:
         return norm_batch_loss
 
     def _add_report(self, valid_score, valid_ppl, valid_loss, eval_metric,
-                    new_best=False):
+                    new_best=False, aux_valid_score=None):
         """
         Add a one-line report to validation logging file.
         :param valid_score:
@@ -538,6 +562,7 @@ class TrainManager:
         :param valid_loss:
         :param eval_metric:
         :param new_best:
+        :param aux_valid_score: if 2 decoders, then this is for auxiliary
         :return:
         """
         current_lr = -1
@@ -560,11 +585,14 @@ class TrainManager:
                 self.stop = True
 
         with open(self.valid_report_file, 'a') as opened_file:
-            opened_file.write(
-                "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
+            report_str = "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t" \
                 "LR: {}\t{}\n".format(
                     self.steps, valid_loss, valid_ppl, eval_metric,
-                    valid_score, current_lr, "*" if new_best else ""))
+                    valid_score, current_lr, "*" if new_best else "")
+            if aux_valid_score is not None:
+                report_str = report_str.strip()+"\tAux {}: {:.5f}\n".format(
+                    eval_metric, aux_valid_score)
+            opened_file.write(report_str)
 
     def store_outputs(self, hypotheses):
         """
@@ -633,24 +661,28 @@ def train(cfg_file):
             beam_size = 0
             beam_alpha = -1
 
-        score, loss, ppl, sources, sources_raw, references, hypotheses, hypotheses_raw, attention_scores  = validate_on_data(
-            data=test_data, batch_size=trainer.batch_size,
-            eval_metric=trainer.eval_metric, level=trainer.level,
-            max_output_length=trainer.max_output_length,
-            model=model, use_cuda=trainer.use_cuda, criterion=None,
-            beam_size=beam_size, beam_alpha=beam_alpha)
-        
-        if "trg" in test_data.fields:
-            decoding_description = "Greedy decoding" if beam_size == 0 else "Beam search decoding with beam size = {} and alpha = {}".format(beam_size, beam_alpha)
-            trainer.logger.info("{:4s}: {} {} [{}]".format("Test data result", score, trainer.eval_metric, decoding_description))
+        if isinstance(model, DeliberationModel):
+            # TODO
+            pass
         else:
-            trainer.logger.info("No references given for {}.{} -> no evaluation.".format(cfg["data"]["test"],cfg["data"]["src"]))
+            score, loss, ppl, sources, sources_raw, references, hypotheses, hypotheses_raw, attention_scores  = validate_on_data(
+                data=test_data, batch_size=trainer.batch_size,
+                eval_metric=trainer.eval_metric, level=trainer.level,
+                max_output_length=trainer.max_output_length,
+                model=model, use_cuda=trainer.use_cuda, criterion=None,
+                beam_size=beam_size, beam_alpha=beam_alpha)
 
-        output_path_set = "{}/{}.{}".format(trainer.model_dir,"test",cfg["data"]["trg"])
-        with open(output_path_set, mode="w", encoding="utf-8") as f:
-            for h in hypotheses:
-                f.write(h + "\n")
-        trainer.logger.info("Test translations saved to: {}".format(output_path_set))
+            if "trg" in test_data.fields:
+                decoding_description = "Greedy decoding" if beam_size == 0 else "Beam search decoding with beam size = {} and alpha = {}".format(beam_size, beam_alpha)
+                trainer.logger.info("{:4s}: {} {} [{}]".format("Test data result", score, trainer.eval_metric, decoding_description))
+            else:
+                trainer.logger.info("No references given for {}.{} -> no evaluation.".format(cfg["data"]["test"],cfg["data"]["src"]))
+
+            output_path_set = "{}/{}.{}".format(trainer.model_dir,"test",cfg["data"]["trg"])
+            with open(output_path_set, mode="w", encoding="utf-8") as f:
+                for h in hypotheses:
+                    f.write(h + "\n")
+            trainer.logger.info("Test translations saved to: {}".format(output_path_set))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('Joey-NMT')
