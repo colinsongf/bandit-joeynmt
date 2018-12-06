@@ -361,12 +361,18 @@ class RecurrentDeliberationDecoder(Decoder):
         #print("src_mask", src_mask.shape)
         src_context, src_att_probs = self.src_attention(
             query=query, values=encoder_output, mask=src_mask)
+        #print("SRC MASK", src_mask)
+        #print("SRC PROB", src_att_probs)
+
         d1_att_values = torch.cat([d1_states, d1_predictions], dim=-1)
         #print("d1_att_values", d1_att_values.shape)
         #print("trg_mask", trg_mask.shape)
         d1_context, d1_att_probs = self.d1_attention(query=query,
                                                      values=d1_att_values,
                                                      mask=trg_mask)
+        #print("TRG MASK", trg_mask)
+        #print("D1 PROB", d1_att_probs)
+
         #print("p1_att_probs", d1_att_probs.shape)
 
         # return attention vector
@@ -375,6 +381,9 @@ class RecurrentDeliberationDecoder(Decoder):
         #print("query", query.shape)
         #print("src_context", src_context.shape)
         #print("d1_context", d1_context.shape)
+        # query: batch x 1 x hidden
+        # src_context: batch x 1 x 2*hidden
+        # d1_context: batch x 1 x (hidden+emb)
         comb_att_vector_input = torch.cat([query, src_context, d1_context],
                                           dim=2)
         #print("comb_att_vector_input", comb_att_vector_input.shape)

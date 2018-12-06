@@ -74,16 +74,24 @@ class DeliberationModel(nn.Module):
                            encoder_hidden=encoder_hidden,
                            src_mask=src_mask, trg_input=trg_input,
                            unrol_steps=unrol_steps)
+        #print("dec1_hidden", dec1_hidden[0].shape)  # 1x batch x hidden size
+        #print("dec1_outputs", dec1_outputs.shape)  # batch x length x vocab
+        #print("dec_att_vectors", dec1_att_vectors.shape)  # batch x length x hidden
         # TODO pass on outputs or hidden? paper says hidden states
         # what if we use attentional vectors instead? (would also contain context)
         d1_states = dec1_att_vectors.detach()  # don't backprop from d2 through d1
         # TODO original paper uses beam seach with k=2 here, let's use greedy search for efficiency
         d1_greedy = torch.argmax(dec1_outputs, dim=-1).detach()  # don't backprop through here
-        d1_predictions = self.trg_embed(d1_greedy) # TODO backprop through embeddings though?
+        d1_predictions = d1_greedy # TODO backprop through embeddings though?  # batch x max_length
+        #print("d1 pred", d1_predictions.shape)
         # TODO is there a target mask?? pro: ignore after </s>, con: full knowledge
-        # for now: just use ones
-        # TODO shapes
-        trg_mask = d1_states.new_ones(d1_states.shape[0], 1, d1_states.shape[1]).byte()
+        # zero out everything after last eos
+        # eos indicator tensor: 1 if eos
+        eos = torch.where(d1_greedy.eq(self.trg_vocab.stoi[EOS_TOKEN]), d1_greedy.new_full([1], 1), d1_greedy.new_full([1], 0))
+        # mask all positions after the first eos to 0 (cumsum of eoses is > 1)
+        trg_mask = torch.where(torch.cumsum(eos, dim=1).gt(1), d1_greedy.new_full([1], 0), d1_greedy.new_full([1], 1)).unsqueeze(1).byte()
+        #print("trg mask", trg_mask.shape)  # batch x 1 x max_length
+        # trg_mask = d1_states.new_ones(d1_states.shape[0], 1, d1_states.shape[1]).byte()
 
         dec2_outputs = self.decode2(encoder_output=encoder_output,
                                     encoder_hidden=encoder_hidden,
@@ -92,6 +100,9 @@ class DeliberationModel(nn.Module):
                                     trg_mask=trg_mask,
                                     d1_states=d1_states,
                                     d1_predictions=d1_predictions)
+        #print("src att1", dec1_att_probs)
+        #print("src_att2", dec2_outputs[3])
+        #print("dec_att2", dec2_outputs[4])
 
         return dec1_outputs, dec2_outputs, d1_greedy, lm_output
 
@@ -134,7 +145,7 @@ class DeliberationModel(nn.Module):
         return self.decoder2(trg_embed=self.trg_embed(trg_input),
                              encoder_output=encoder_output,
                              encoder_hidden=encoder_hidden,
-                             d1_predictions=d1_predictions,
+                             d1_predictions=self.trg_embed(d1_predictions),
                              d1_states=d1_states,
                              trg_mask=trg_mask,
                              src_mask=src_mask,
@@ -243,7 +254,7 @@ class DeliberationModel(nn.Module):
                 encoder_hidden=encoder_hidden, encoder_output=encoder_output,
                 src_mask=batch.src_mask, embed=self.trg_embed,
                 bos_index=self.bos_index, decoders=[self.decoder1, self.decoder2],
-                max_output_length=max_output_length)
+                max_output_length=max_output_length, eos_index=self.trg_vocab.stoi[EOS_TOKEN])
             # batch, time, max_src_length
         else:  # beam size
             stacked_output1, stacked_attention_scores1 = \
@@ -294,7 +305,7 @@ class DeliberationModel(nn.Module):
 
 
 def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
-           encoder_output, encoder_hidden):
+           encoder_output, encoder_hidden, eos_index):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
     :param src_mask:
@@ -343,9 +354,16 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
 
     d1_states = stacked_attention_vectors
     d1_greedy = stacked_output
-    d1_predictions = embed(d1_greedy)
-    trg_mask = d1_states.new_ones(d1_states.shape[0], 1,
-                                  d1_states.shape[1]).byte()
+    d1_predictions = d1_greedy
+
+    # zero out everything after last eos
+    # eos indicator tensor: 1 if eos
+    eos = torch.where(d1_greedy.eq(eos_index),
+                      d1_greedy.new_full([1], 1), d1_greedy.new_full([1], 0))
+    # mask all positions after the first eos to 0 (cumsum of eoses is > 1)
+    trg_mask = torch.where(torch.cumsum(eos, dim=1).gt(1),
+                           d1_greedy.new_full([1], 0),
+                           d1_greedy.new_full([1], 1)).unsqueeze(1).byte()
     output2 = []
     src_attention_scores = []
     d1_attention_scores = []
@@ -362,7 +380,7 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
                                 hidden=hidden2,
                                 trg_mask=trg_mask,
                                 d1_states=d1_states,
-                                d1_predictions=d1_predictions,
+                                d1_predictions=embed(d1_predictions),
                                 prev_comb_att_vector=prev_comb_att_vector)
 
         # greedy decoding: choose arg max over vocabulary in each step

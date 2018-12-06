@@ -18,7 +18,7 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_model_from_checkpoint
 from joeynmt.prediction import validate_on_data
 from joeynmt.deliberation import DeliberationModel
-from joeynmt.attention import LuongAttention, BahdanauAttention
+from joeynmt.attention import BahdanauAttention
 
 
 class TrainManager:
@@ -250,18 +250,17 @@ class TrainManager:
                                 new_param_dict[new_name2.replace("attention", "src_attention")] = param
                     else:
                         new_param_dict[name] = param
-
                 # TODO other initialization?
                 # attention vector layer of 2nd decoder and attention between decoders have be initialized randomly (different shape)
-                new_param_dict["decoder2.comb_att_vector_layer.weight"] = torch.rand_like(self.model.decoder2.comb_att_vector_layer.weight).uniform_(
-                                    -0.1, 0.1)
-                new_param_dict["decoder2.comb_att_vector_layer.bias"] = torch.rand_like(self.model.decoder2.comb_att_vector_layer.bias).uniform_(
-                                    -0.1, 0.1)
-                new_param_dict["decoder2.d1_attention.key_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.key_layer.weight).uniform_(-0.1, 0.1)
+                scale = 0.1
+                init = lambda p: nn.init.uniform_(p, a=-scale, b=scale)
+                new_param_dict["decoder2.comb_att_vector_layer.weight"] = init(torch.empty_like(self.model.decoder2.comb_att_vector_layer.weight))
+                new_param_dict["decoder2.comb_att_vector_layer.bias"] = init(torch.empty_like(self.model.decoder2.comb_att_vector_layer.bias))
+                new_param_dict["decoder2.d1_attention.key_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.key_layer.weight))
                 if isinstance(self.model.decoder2.d1_attention, BahdanauAttention):
                     # LuongAttention doesn't have these
-                    new_param_dict["decoder2.d1_attention.query_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.query_layer.weight).uniform_(-0.1, 0.1)
-                    new_param_dict["decoder2.d1_attention.energy_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.energy_layer.weight).uniform_(-0.1, 0.1)
+                    new_param_dict["decoder2.d1_attention.query_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.query_layer.weight))
+                    new_param_dict["decoder2.d1_attention.energy_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.energy_layer.weight))
 
                 self.model.load_state_dict(new_param_dict)
         else:
