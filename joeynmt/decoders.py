@@ -275,16 +275,26 @@ class RecurrentDeliberationDecoder(Decoder):
 
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
+        # learns to combine src and trg attention contexts
+        self.context_comb_layer = nn.Linear(
+            encoder.output_size + hidden_size + emb_size, encoder.output_size,
+        bias=True)
+
         self.input_feeding = input_feeding
         if self.input_feeding:
             # combine hidden state and attentional context before feeding to rnn
+            #self.comb_att_vector_layer = nn.Linear(
+            #    hidden_size + encoder.output_size + hidden_size + emb_size,
+            #    hidden_size, bias=True)
             self.comb_att_vector_layer = nn.Linear(
-                hidden_size + encoder.output_size + hidden_size + emb_size,
-                hidden_size, bias=True)
+                hidden_size + encoder.output_size, hidden_size, bias=True
+            )
             self.rnn_input_size = emb_size + hidden_size
         else: # TODO does this make sense?
             # just feed prev word embedding
             self.rnn_input_size = emb_size
+
+
 
         # the decoder RNN
         self.rnn = rnn(self.rnn_input_size, hidden_size, num_layers,
@@ -384,8 +394,15 @@ class RecurrentDeliberationDecoder(Decoder):
         # query: batch x 1 x hidden
         # src_context: batch x 1 x 2*hidden
         # d1_context: batch x 1 x (hidden+emb)
-        comb_att_vector_input = torch.cat([query, src_context, d1_context],
-                                          dim=2)
+
+        # learn to combine src and d1 context
+        comb_context = torch.tanh(
+            self.context_comb_layer(
+                torch.cat([src_context, d1_context], dim=2)))
+
+        #comb_att_vector_input = torch.cat([query, src_context, d1_context],
+        #                                  dim=2)
+        comb_att_vector_input = torch.cat([query, comb_context], dim=2)
         #print("comb_att_vector_input", comb_att_vector_input.shape)
         comb_att_vector_input = self.hidden_dropout(comb_att_vector_input)
 

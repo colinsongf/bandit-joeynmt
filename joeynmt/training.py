@@ -248,14 +248,21 @@ class TrainManager:
                             # second decoder: same src attention as first decoder
                             if "attention" in name:
                                 new_param_dict[new_name2.replace("attention", "src_attention")] = param
+                            elif "att_vector" in name:
+                                new_param_dict[new_name2.replace("att_vector", "comb_att_vector")] = param
                     else:
                         new_param_dict[name] = param
                 # TODO other initialization?
                 # attention vector layer of 2nd decoder and attention between decoders have be initialized randomly (different shape)
                 scale = 0.1
                 init = lambda p: nn.init.uniform_(p, a=-scale, b=scale)
-                new_param_dict["decoder2.comb_att_vector_layer.weight"] = init(torch.empty_like(self.model.decoder2.comb_att_vector_layer.weight))
-                new_param_dict["decoder2.comb_att_vector_layer.bias"] = init(torch.empty_like(self.model.decoder2.comb_att_vector_layer.bias))
+                #new_param_dict["decoder2.comb_att_vector_layer.weight"] = init(torch.empty_like(self.model.decoder2.comb_att_vector_layer.weight))
+                #new_param_dict["decoder2.comb_att_vector_layer.bias"] = init(torch.empty_like(self.model.decoder2.comb_att_vector_layer.bias))
+
+                # new layer to combine contexts
+                new_param_dict["decoder2.context_comb_layer.weight"] = init(torch.empty_like(self.model.decoder2.context_comb_layer.weight))
+                new_param_dict["decoder2.context_comb_layer.bias"] = init(torch.empty_like(self.model.decoder2.context_comb_layer.bias))
+
                 new_param_dict["decoder2.d1_attention.key_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.key_layer.weight))
                 if isinstance(self.model.decoder2.d1_attention, BahdanauAttention):
                     # LuongAttention doesn't have these
