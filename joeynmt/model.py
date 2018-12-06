@@ -108,6 +108,7 @@ class Model(nn.Module):
         self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
+        self.criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
@@ -162,7 +163,7 @@ class Model(nn.Module):
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
 
-    def get_loss_for_batch(self, batch, criterion):
+    def get_loss_for_batch(self, batch):
         """
         Compute non-normalized loss and number of tokens for a batch
         :param batch:
@@ -179,7 +180,7 @@ class Model(nn.Module):
         log_probs = F.log_softmax(out, dim=-1)
 
         # compute batch loss
-        batch_loss = criterion(
+        batch_loss = self.criterion(
             input=log_probs.contiguous().view(-1, log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))
         # return batch loss = sum over all elements in batch that are not pad

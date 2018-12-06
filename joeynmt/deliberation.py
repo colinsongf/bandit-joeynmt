@@ -53,6 +53,11 @@ class DeliberationModel(nn.Module):
         self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
+        self.register_buffer('total_cost', torch.zeros([1]))
+        self.register_buffer('total_samples', torch.zeros([1]))
+
+        self.criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='none')
+
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
@@ -152,7 +157,7 @@ class DeliberationModel(nn.Module):
                              unrol_steps=unrol_steps,
                              hidden=decoder_hidden)
 
-    def get_loss_for_batch(self, batch, criterion):
+    def get_loss_for_batch(self, batch):
         """
         Compute non-normalized loss and number of tokens for a batch
         :param batch:
@@ -174,21 +179,53 @@ class DeliberationModel(nn.Module):
         # 3. shared encoder: sum of both
         # grad( log p_d2(y| y_d1, x)) + grad(log p_d1(y_d1 | x) * no_grad (log p_d2(y | y_d1, x))
 
-        # d1
-        d1_log_probs = F.log_softmax(d1_output, dim=-1)
-        # pretend targets are sampled
-        d1_pred_logprobs = criterion(input=d1_log_probs.contiguous().view(-1, d1_log_probs.size(-1)), target=d1_predictions.contiguous().view(-1))
-
         # d2
         d2_log_probs = F.log_softmax(d2_out, dim=-1)
-        # standard xent
-        d2_ref_logprobs = criterion(input=d2_log_probs.contiguous().view(-1, d2_log_probs.size(-1)), target=batch.trg.contiguous().view(-1))
+        # standard xent, ignores padding
+        batch_size = batch.trg.shape[0]
+        # loss for each batch
+        d2_ref_neglogprobs = self.criterion(input=d2_log_probs.contiguous().view(-1, d2_log_probs.size(-1)), target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
+        assert d2_ref_neglogprobs.shape == torch.Size([batch_size])
+
+        # d1
+        d1_log_probs = F.log_softmax(d1_output, dim=-1)
+        # pretend targets are sampled, ignores padding
+        # TODO include mask to exclude area after first eos?
+        d1_pred_neglogprobs = self.criterion(
+            input=d1_log_probs.contiguous().view(-1, d1_log_probs.size(-1)),
+            target=d1_predictions.contiguous().view(-1)).view(batch_size, -1).sum(-1)
+        assert d1_pred_neglogprobs.shape == torch.Size([batch_size])
+
+        # also add standard xent loss for 1s decoder to keep it stable
+        d1_ref_neglogprobs = self.criterion(input=d1_log_probs.contiguous().view(-1, d1_log_probs.size(-1)),
+            target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
+        assert d1_ref_neglogprobs.shape == torch.Size([batch_size])
+
 
         # don't backprop through d2 for d1's parameters
-        d1_loss = d1_pred_logprobs * d2_ref_logprobs.detach()
-        d2_loss = d2_ref_logprobs
+        # d2's likelihood is the reward for d1 (padding not included) -> neg ll is cost, since we do minimization
+        #print("d2 neg log prob", d2_ref_neglogprobs)
+        #print("norm", d2_ref_neglogprobs/batch.ntokens)
+        #print("d1_pred_neglo", d1_pred_neglogprobs)
+        # FIXME neg log likelihood is huge in the beginning
+        cost = d2_ref_neglogprobs.detach()
 
-        batch_loss = d1_loss + d2_loss
+        # update running sums to compute baseline
+        #self.total_samples += batch.ntokens
+        #self.total_cost += cost
+        #baseline = self.total_cost/self.total_samples
+        #print(cost, baseline)
+        #cost = cost - baseline
+       # print(cost)
+
+        d1_loss = d1_pred_neglogprobs*cost + d1_ref_neglogprobs
+        d2_loss = d2_ref_neglogprobs
+        #print(d1_loss, d2_loss)
+
+        # TODO separate gradients like here?
+        # https://blog.millionintegrals.com/vel-pytorch-meets-baselines/
+
+        batch_loss = (d1_loss + d2_loss).sum()  # sum over batch
 
         # add lm loss (optional)
         if lm_output is not None:
@@ -205,7 +242,7 @@ class DeliberationModel(nn.Module):
             print("predicted", predictions[0])
             lm_logprobs = F.log_softmax(lm_output, dim=-1)
             # shift inputs to the left for loss targets, ignore last hidden state
-            lm_loss = criterion(
+            lm_loss = self.criterion(
                 input=lm_logprobs[:, :-1].contiguous().view(-1,
                                                             lm_logprobs.size(
                                                                 -1)),

@@ -35,7 +35,6 @@ class TrainManager:
         self.model = model
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
-        criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
         if train_config["loss"].lower() not in ["crossentropy", "xent",
                                                 "mle", "cross-entropy"]:
@@ -143,7 +142,6 @@ class TrainManager:
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
-        self.criterion = criterion
         self.normalization = train_config.get("normalization", "batch")
         self.steps = 0
         # stop training if this flag is True by reaching learning rate minimum
@@ -269,6 +267,10 @@ class TrainManager:
                     new_param_dict["decoder2.d1_attention.query_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.query_layer.weight))
                     new_param_dict["decoder2.d1_attention.energy_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.energy_layer.weight))
 
+                if "total_sample" not in param_dict:
+                    # buffer for reward baselines
+                    new_param_dict["total_samples"] = torch.zeros_like(self.model.total_samples)
+                    new_param_dict["total_cost"] = torch.zeros_like(self.model.total_cost)
                 self.model.load_state_dict(new_param_dict)
         else:
             self.model.load_state_dict(param_dict)
@@ -375,8 +377,7 @@ class TrainManager:
             eval_metric=self.eval_metric,
             level=self.level, model=self.model,
             use_cuda=self.use_cuda,
-            max_output_length=self.max_output_length,
-            criterion=self.criterion)
+            max_output_length=self.max_output_length)
         if isinstance(self.model, DeliberationModel):
             (valid_score,
              aux_valid_score), valid_loss, valid_ppl, valid_sources, \
@@ -535,8 +536,7 @@ class TrainManager:
         :param batch:
         :return:
         """
-        batch_loss = self.model.get_loss_for_batch(
-            batch=batch, criterion=self.criterion)
+        batch_loss = self.model.get_loss_for_batch(batch=batch)
 
         # normalize batch loss
         if self.normalization == "batch":
@@ -687,7 +687,7 @@ def train(cfg_file):
                 data=test_data, batch_size=trainer.batch_size,
                 eval_metric=trainer.eval_metric, level=trainer.level,
                 max_output_length=trainer.max_output_length,
-                model=model, use_cuda=trainer.use_cuda, criterion=None,
+                model=model, use_cuda=trainer.use_cuda,
                 beam_size=beam_size, beam_alpha=beam_alpha)
 
             if "trg" in test_data.fields:

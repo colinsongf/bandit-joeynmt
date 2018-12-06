@@ -13,10 +13,10 @@ from joeynmt.batch import Batch
 from joeynmt.deliberation import DeliberationModel
 
 def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
-                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1):
+                     level, eval_metric, beam_size=0, beam_alpha=-1):
     """
     Generate translations for the given data.
-    If `criterion` is not None and references are given, also compute the loss.
+    If references are given, also compute the loss.
     :param model:
     :param data:
     :param batch_size:
@@ -24,7 +24,6 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
     :param max_output_length:
     :param level:
     :param eval_metric:
-    :param criterion:
     :param beam_size:
     :param beam_alpha:
     :return:
@@ -55,9 +54,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
                 # TODO save computation: forward pass is computed twice
                 # run as during training with teacher forcing
-                if criterion is not None and batch.trg is not None:
-                    batch_loss = model.get_loss_for_batch(
-                        batch, criterion=criterion)
+                if batch.trg is not None:
+                    batch_loss = model.get_loss_for_batch(batch)
                     total_loss += batch_loss
                     total_ntokens += batch.ntokens
 
@@ -82,7 +80,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
             assert len(all_outputs2) == len(data) == len(all_outputs1)
 
-            if criterion is not None and total_ntokens > 0:
+            if total_ntokens > 0:
                 # total validation loss
                 valid_loss = total_loss
                 # exponent of token-level negative log prob
@@ -169,9 +167,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
                 # TODO save computation: forward pass is computed twice
                 # run as during training with teacher forcing
-                if criterion is not None and batch.trg is not None:
-                    batch_loss = model.get_loss_for_batch(
-                        batch, criterion=criterion)
+                if batch.trg is not None:
+                    batch_loss = model.get_loss_for_batch(batch)
                     total_loss += batch_loss
                     total_ntokens += batch.ntokens
 
@@ -188,7 +185,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
             assert len(all_outputs) == len(data)
 
-            if criterion is not None and total_ntokens > 0:
+            if total_ntokens > 0:
                 # total validation loss
                 valid_loss = total_loss
                 # exponent of token-level negative log prob
@@ -312,7 +309,7 @@ def test(cfg_file,
             hypotheses_raw, attention_scores = validate_on_data(
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
-                use_cuda=use_cuda, criterion=None, beam_size=beam_size,
+                use_cuda=use_cuda, beam_size=beam_size,
                 beam_alpha=beam_alpha)
 
             if "trg" in data_set.fields:
