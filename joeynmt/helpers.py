@@ -238,7 +238,7 @@ def load_data(cfg):
     else:  # bpe or word, pre-tokenized
         tok_fun = lambda s: s.split()
 
-    src_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN,
+    src_field = data.Field(init_token=None, eos_token=EOS_TOKEN,
                            pad_token=PAD_TOKEN, tokenize=tok_fun,
                            batch_first=True, lower=lowercase,
                            unk_token=UNK_TOKEN,
