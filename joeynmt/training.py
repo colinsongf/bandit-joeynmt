@@ -18,6 +18,7 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_model_from_checkpoint
 from joeynmt.prediction import validate_on_data
 from joeynmt.deliberation import DeliberationModel
+from joeynmt.attention import LuongAttention, BahdanauAttention
 
 
 class TrainManager:
@@ -179,8 +180,8 @@ class TrainManager:
             "you can only specify either clip_grad_val or clip_grad_norm"
 
         if "load_model" in train_config.keys():
-            # TODO deliberation: load decoders params for both decoders
-            # TODO pre-trained model can have 1 or 2 decoders (either base or delib model)
+            # deliberation: load decoders params for both decoders
+            # pre-trained model can have 1 or 2 decoders (either base or delib model)
             model_load_path = train_config["load_model"]
             self.logger.info("Loading model from {}".format(model_load_path))
             self.load_checkpoint(model_load_path)
@@ -257,8 +258,10 @@ class TrainManager:
                 new_param_dict["decoder2.comb_att_vector_layer.bias"] = torch.rand_like(self.model.decoder2.comb_att_vector_layer.bias).uniform_(
                                     -0.1, 0.1)
                 new_param_dict["decoder2.d1_attention.key_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.key_layer.weight).uniform_(-0.1, 0.1)
-                new_param_dict["decoder2.d1_attention.query_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.query_layer.weight).uniform_(-0.1, 0.1)
-                new_param_dict["decoder2.d1_attention.energy_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.energy_layer.weight).uniform_(-0.1, 0.1)
+                if isinstance(self.model.decoder2.d1_attention, BahdanauAttention):
+                    # LuongAttention doesn't have these
+                    new_param_dict["decoder2.d1_attention.query_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.query_layer.weight).uniform_(-0.1, 0.1)
+                    new_param_dict["decoder2.d1_attention.energy_layer.weight"] = torch.rand_like(self.model.decoder2.d1_attention.energy_layer.weight).uniform_(-0.1, 0.1)
 
                 self.model.load_state_dict(new_param_dict)
         else:
@@ -358,6 +361,112 @@ class TrainManager:
         logger.info("Hello! This is Joey-NMT.")
         return logger
 
+    def validate_and_report(self, valid_data, epoch_no, total_valid_duration):
+        valid_start_time = time.time()
+
+        valid_result = validate_on_data(
+            batch_size=self.batch_size, data=valid_data,
+            eval_metric=self.eval_metric,
+            level=self.level, model=self.model,
+            use_cuda=self.use_cuda,
+            max_output_length=self.max_output_length,
+            criterion=self.criterion)
+        if isinstance(self.model, DeliberationModel):
+            (valid_score,
+             aux_valid_score), valid_loss, valid_ppl, valid_sources, \
+            valid_sources_raw, valid_references, (
+                valid_hypotheses1, valid_hypotheses2), \
+            (valid_hypotheses_raw1, valid_hypotheses_raw2), \
+            (valid_attention_scores, valid_src_attention_scores,
+             valid_d1_attention_scores) = valid_result
+            valid_hypotheses = valid_hypotheses2
+            valid_hypotheses_raw = valid_hypotheses_raw2
+            # TODO pass attention scores on to later code
+        else:
+            valid_score, valid_loss, valid_ppl, valid_sources, \
+            valid_sources_raw, valid_references, valid_hypotheses, \
+            valid_hypotheses_raw, valid_attention_scores = valid_result
+            aux_valid_score = None
+        if valid_score > self.best_ckpt_score:
+            self.best_ckpt_score = valid_score
+            self.best_ckpt_iteration = self.steps
+            self.logger.info('Hooray! New best validation result!')
+            self.save_checkpoint()
+
+        # pass validation score or loss or ppl to scheduler
+        if self.schedule_metric == "loss":
+            # schedule based on loss
+            schedule_score = valid_loss
+        elif self.schedule_metric in ["ppl", "perplexity"]:
+            # schedule based on perplexity
+            schedule_score = valid_ppl
+        else:
+            # schedule based on evaluation score
+            schedule_score = valid_score
+
+        if isinstance(self.model, DeliberationModel):
+            if self.scheduler1 is not None:
+                self.scheduler1.step(schedule_score)
+            if self.scheduler2 is not None:
+                self.scheduler2.step(schedule_score)
+        else:
+            if self.scheduler is not None:
+                self.scheduler.step(schedule_score)
+
+        # append to validation report
+        self._add_report(
+            valid_score=valid_score, valid_loss=valid_loss,
+            valid_ppl=valid_ppl, eval_metric=self.eval_metric,
+            new_best=self.steps == self.best_ckpt_iteration,
+            aux_valid_score=aux_valid_score)
+
+        # always print first x sentences
+        for p in range(self.print_valid_sents):
+            self.logger.debug("Example #{}".format(p))
+            self.logger.debug("\tRaw source: {}".format(
+                valid_sources_raw[p]))
+            self.logger.debug("\tSource: {}".format(
+                valid_sources[p]))
+            self.logger.debug("\tReference: {}".format(
+                valid_references[p]))
+            self.logger.debug("\tRaw hypothesis: {}".format(
+                valid_hypotheses_raw[p]))
+            self.logger.debug("\tHypothesis: {}".format(
+                valid_hypotheses[p]))
+            if isinstance(self.model, DeliberationModel):
+                self.logger.debug("\tRaw hypothesis Dec1: {}".format(
+                    valid_hypotheses_raw1[p]))
+                self.logger.debug("\tHypothesis Dec1: {}".format(
+                    valid_hypotheses1[p]))
+
+        valid_duration = time.time() - valid_start_time
+        total_valid_duration += valid_duration
+        self.logger.info(
+            'Validation result at epoch {}, step {}: {}: {}, '
+            'loss: {}, ppl: {}, duration: {:.4f}s'.format(
+                epoch_no + 1, self.steps, self.eval_metric,
+                valid_score, valid_loss, valid_ppl, valid_duration))
+        if isinstance(self.model, DeliberationModel):
+            self.logger.info('D1 Validation result at epoch {}, '
+                             'step {}: {}: {}'.format(
+                epoch_no + 1, self.steps, self.eval_metric,
+                aux_valid_score))
+        # store validation set outputs
+        self.store_outputs(valid_hypotheses)
+
+        # store attention plots for first three sentences of
+        # valid data and one randomly chosen example
+        store_attention_plots(attentions=valid_attention_scores,
+                              targets=valid_hypotheses_raw,
+                              sources=[s for s in valid_data.src],
+                              idx=[0, 1, 2,
+                                   np.random.randint(0, len(
+                                       valid_hypotheses))],
+                              output_prefix="{}/att.{}".format(
+                                  self.model_dir,
+                                  self.steps))
+        return total_valid_duration
+
     def train_and_validate(self, train_data, valid_data):
         """
         Train the model and validate it from time to time on the validation set.
@@ -367,6 +476,11 @@ class TrainManager:
         """
         train_iter = make_data_iter(train_data, batch_size=self.batch_size,
                                     train=True, shuffle=self.shuffle)
+        # initial validation before training
+        self.validate_and_report(
+            valid_data=valid_data, epoch_no=0,
+            total_valid_duration=0)
+
         for epoch_no in range(self.epochs):
             self.logger.info("EPOCH {}".format(epoch_no + 1))
             self.model.train()
@@ -394,111 +508,9 @@ class TrainManager:
 
                 # validate on whole dev set
                 if self.steps % self.validation_freq == 0:
-                    valid_start_time = time.time()
-
-                    valid_result = validate_on_data(
-                            batch_size=self.batch_size, data=valid_data,
-                            eval_metric=self.eval_metric,
-                            level=self.level, model=self.model,
-                            use_cuda=self.use_cuda,
-                            max_output_length=self.max_output_length,
-                            criterion=self.criterion)
-                    if isinstance(self.model, DeliberationModel):
-                        (valid_score,
-                         aux_valid_score), valid_loss, valid_ppl, valid_sources, \
-                         valid_sources_raw, valid_references, (
-                         valid_hypotheses1, valid_hypotheses2), \
-                         (valid_hypotheses_raw1, valid_hypotheses_raw2), \
-                         (valid_attention_scores, valid_src_attention_scores,
-                         valid_d1_attention_scores) = valid_result
-                        valid_hypotheses = valid_hypotheses2
-                        valid_hypotheses_raw = valid_hypotheses_raw2
-                        # TODO pass attention scores on to later code
-                    else:
-                        valid_score, valid_loss, valid_ppl, valid_sources, \
-                        valid_sources_raw, valid_references, valid_hypotheses, \
-                        valid_hypotheses_raw, valid_attention_scores = valid_result
-                        aux_valid_score = None
-                    if valid_score > self.best_ckpt_score:
-                        self.best_ckpt_score = valid_score
-                        self.best_ckpt_iteration = self.steps
-                        self.logger.info('Hooray! New best validation result!')
-                        self.save_checkpoint()
-
-                    # pass validation score or loss or ppl to scheduler
-                    if self.schedule_metric == "loss":
-                        # schedule based on loss
-                        schedule_score = valid_loss
-                    elif self.schedule_metric in ["ppl", "perplexity"]:
-                        # schedule based on perplexity
-                        schedule_score = valid_ppl
-                    else:
-                        # schedule based on evaluation score
-                        schedule_score = valid_score
-
-                    if isinstance(self.model, DeliberationModel):
-                        if self.scheduler1 is not None:
-                            self.scheduler1.step(schedule_score)
-                        if self.scheduler2 is not None:
-                            self.scheduler2.step(schedule_score)
-                    else:
-                        if self.scheduler is not None:
-                            self.scheduler.step(schedule_score)
-
-                    # append to validation report
-                    self._add_report(
-                        valid_score=valid_score, valid_loss=valid_loss,
-                        valid_ppl=valid_ppl, eval_metric=self.eval_metric,
-                        new_best=self.steps == self.best_ckpt_iteration,
-                        aux_valid_score=aux_valid_score)
-
-                    # always print first x sentences
-                    for p in range(self.print_valid_sents):
-                        self.logger.debug("Example #{}".format(p))
-                        self.logger.debug("\tRaw source: {}".format(
-                            valid_sources_raw[p]))
-                        self.logger.debug("\tSource: {}".format(
-                            valid_sources[p]))
-                        self.logger.debug("\tReference: {}".format(
-                            valid_references[p]))
-                        self.logger.debug("\tRaw hypothesis: {}".format(
-                            valid_hypotheses_raw[p]))
-                        self.logger.debug("\tHypothesis: {}".format(
-                            valid_hypotheses[p]))
-                        if isinstance(self.model, DeliberationModel):
-                            self.logger.debug("\tRaw hypothesis Dec1: {}".format(
-                                valid_hypotheses_raw1[p]))
-                            self.logger.debug("\tHypothesis Dec1: {}".format(
-                            valid_hypotheses1[p]))
-
-
-                    valid_duration = time.time() - valid_start_time
-                    total_valid_duration += valid_duration
-                    self.logger.info(
-                        'Validation result at epoch {}, step {}: {}: {}, '
-                        'loss: {}, ppl: {}, duration: {:.4f}s'.format(
-                            epoch_no+1, self.steps, self.eval_metric,
-                            valid_score, valid_loss, valid_ppl, valid_duration))
-                    if isinstance(self.model, DeliberationModel):
-                        self.logger.info('D1 Validation result at epoch {}, '
-                                         'step {}: {}: {}'.format(
-                            epoch_no+1, self.steps, self.eval_metric,
-                            aux_valid_score))
-                    # store validation set outputs
-                    self.store_outputs(valid_hypotheses)
-
-                    # store attention plots for first three sentences of
-                    # valid data and one randomly chosen example
-                    store_attention_plots(attentions=valid_attention_scores,
-                                          targets=valid_hypotheses_raw,
-                                          sources=[s for s in valid_data.src],
-                                          idx=[0, 1, 2,
-                                               np.random.randint(0, len(
-                                                   valid_hypotheses))],
-                                          output_prefix="{}/att.{}".format(
-                                              self.model_dir,
-                                              self.steps))
-
+                    self.validate_and_report(
+                        valid_data=valid_data, epoch_no=epoch_no,
+                        total_valid_duration=total_valid_duration)
                 if self.stop:
                     break
             if self.stop:
