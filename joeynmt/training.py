@@ -118,6 +118,7 @@ class TrainManager:
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
+        self.batch_multiplier = train_config.get("batch_multiplier", 1)
         self.normalization = train_config.get("normalization", "batch")
         self.steps = 0
         # stop training if this flag is True by reaching learning rate minimum
@@ -458,12 +459,19 @@ class TrainManager:
             start = time.time()
             total_valid_duration = 0
             processed_tokens = self.total_tokens
+            count = 0
 
             for batch_no, batch in enumerate(iter(train_iter), 1):
                 # reactivate training
                 self.model.train()
                 batch = Batch(batch, self.pad_index, use_cuda=self.use_cuda)
-                batch_loss = self._train_batch(batch)
+                # only update every batch_multiplier batches
+                # https://medium.com/@davidlmorton/increasing-mini-batch-size-without-increasing-memory-6794e10db672
+                update = count == 0
+                #print(count, update, self.steps)
+                batch_loss = self._train_batch(batch, update=update)
+                count = self.batch_multiplier if update else count
+                count -= 1
 
                 # log learning progress
                 if self.model.training and self.steps % self.logging_freq == 0:
@@ -493,7 +501,7 @@ class TrainManager:
         self.logger.info('Best validation result at step {}: {} {}.'.format(
             self.best_ckpt_iteration, self.best_ckpt_score, self.eval_metric))
 
-    def _train_batch(self, batch):
+    def _train_batch(self, batch, update=True):
         """
         Train the model on one batch: Compute the loss, make a gradient step.
         :param batch:
@@ -510,21 +518,23 @@ class TrainManager:
             raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
         norm_batch_loss = batch_loss.sum() / normalizer
+        norm_batch_multiply = norm_batch_loss / self.batch_multiplier
 
         # compute gradients
-        norm_batch_loss.backward()
+        norm_batch_multiply.backward()
 
         if self.clip_grad_fun is not None:
             # clip gradients (in-place)
             self.clip_grad_fun(
                 params=[p for p in self.model.parameters() if p.requires_grad])
 
-        # make gradient step
-        self.optimizer.step()
-        self.optimizer.zero_grad()
-
-        # increment step and token counter
-        self.steps += 1
+        if update:
+            # make gradient step
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            # increment step
+            self.steps += 1
+        # increment token counter
         self.total_tokens += batch.ntokens
         return norm_batch_loss
 

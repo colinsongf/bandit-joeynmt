@@ -24,12 +24,13 @@ training:
     optimizer: "adam"
     loss: "crossentropy"
     normalization: batch
-    learning_rate: 0.00001
-    learning_rate_min: 0.000002
+    learning_rate: [0.000000000004, 0.0000000000001, 0.0000004]
+    learning_rate_min: [0.0000000000003, 0.000000000000002, 0.00000000001]
 #    clip_grad_val: 1.0
     weight_decay: 0.0
     clip_grad_norm: 1.0
-    batch_size: 10
+    batch_size: 5
+    batch_multiplier: 2
     scheduling: "plateau"
     patience: 5
     decrease_factor: 0.5
@@ -52,23 +53,25 @@ model:
     bias_initializer: "zeros"
     init_rnn_orthogonal: False
     lstm_forget_gate: 0.
+    d1_xent: 0.1
+    baseline: True
     encoder:
         type: "lstm"
         embeddings:
             embedding_dim: 16
             scale: False
-            freeze: True
+            freeze: False
         hidden_size: 64
         bidirectional: True
         dropout: 0.1
         num_layers: 1
-        freeze: True
+        freeze: False
     decoder_1:
         type: "lstm"
         embeddings:
             embedding_dim: 16
             scale: False
-            freeze: True
+            freeze: False
         hidden_size: 64
         dropout: 0.1
         hidden_dropout: 0.1
@@ -76,13 +79,13 @@ model:
         input_feeding: True
         bridge: False
         attention: "bahdanau"
-        freeze: True
+        freeze: False
     decoder_2:
         type: "lstm"
         embeddings:
             embedding_dim: 16
             scale: False
-            freeze: True
+            freeze: False
         hidden_size: 64
         dropout: 0.1
         hidden_dropout: 0.1
