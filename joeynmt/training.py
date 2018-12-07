@@ -478,7 +478,7 @@ class TrainManager:
                 count -= 1
 
                 # log learning progress
-                if self.model.training and self.steps % self.logging_freq == 0:
+                if self.model.training and self.steps % self.logging_freq == 0 and update:
                     elapsed = time.time() - start - total_valid_duration
                     elapsed_tokens = self.total_tokens - processed_tokens
                     self.logger.info(
@@ -489,7 +489,7 @@ class TrainManager:
                     total_valid_duration = 0
 
                 # validate on whole dev set
-                if self.steps % self.validation_freq == 0:
+                if self.steps % self.validation_freq == 0 and update:
                     self.validate_and_report(
                         valid_data=valid_data, epoch_no=epoch_no,
                         total_valid_duration=total_valid_duration)
@@ -512,7 +512,7 @@ class TrainManager:
         :return:
         """
         batch_loss = self.model.get_loss_for_batch(batch=batch)
-
+        # TODO does it fit together if batch_loss is sum of batch?
         # normalize batch loss
         if self.normalization == "batch":
             normalizer = batch.nseqs
