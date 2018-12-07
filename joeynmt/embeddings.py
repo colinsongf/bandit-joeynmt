@@ -11,6 +11,7 @@ class Embeddings(nn.Module):
     def __init__(self,
                  embedding_dim: int = 64,
                  scale: bool = False,
+                 freeze: bool = False,
                  vocab_size: int = 0,
                  padding_idx: int = 1):
         """
@@ -20,6 +21,7 @@ class Embeddings(nn.Module):
         :param scale:
         :param vocab_size:
         :param padding_idx:
+        :param freeze: do not update the parameters of these embeddings
         """
         super(Embeddings, self).__init__()
 
@@ -28,6 +30,10 @@ class Embeddings(nn.Module):
         self.vocab_size = vocab_size
         self.lut = nn.Embedding(vocab_size, self.embedding_dim,
                                 padding_idx=padding_idx)
+        if freeze:
+            for n, p in self.named_parameters():
+                print("Not training {}".format(n))
+                p.requires_grad=False
 
     def forward(self, x):
         if self.scale:

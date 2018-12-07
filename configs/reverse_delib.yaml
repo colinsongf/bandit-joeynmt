@@ -1,0 +1,94 @@
+name: "reverse_experiment_deliberation"
+
+data:
+    src: "src"
+    trg: "trg"
+    train: "test/data/reverse/train"
+    dev: "test/data/reverse/dev"
+    test: "test/data/reverse/test"
+    level: "word"
+    lowercase: False
+    max_sent_length: 11
+    voc_min_freq: 0
+    voc_limit: 100
+    src_vocab: "reverse_luong_0003/src_vocab.txt"
+    trg_vocab: "reverse_luong_0003/trg_vocab.txt"
+
+testing:
+    beam_size: 10
+    alpha: 1.0
+
+training:
+    load_model: "reverse_bahdanau/1000.ckpt"
+    random_seed: 42
+    optimizer: "adam"
+    loss: "crossentropy"
+    normalization: batch
+    learning_rate: 0.00001
+    learning_rate_min: 0.000002
+#    clip_grad_val: 1.0
+    weight_decay: 0.0
+    clip_grad_norm: 1.0
+    batch_size: 10
+    scheduling: "plateau"
+    patience: 5
+    decrease_factor: 0.5
+    schedule_after_loss: True
+    epochs: 10
+    validation_freq: 1000
+    logging_freq: 100
+    eval_metric: "bleu"
+    model_dir: "reverse_bahdanau_delib"
+    overwrite: True
+    shuffle: True
+    use_cuda: False
+    max_output_length: 11
+    print_valid_sents: 3
+
+model:
+    initializer: "xavier"
+    embed_initializer: "normal"
+    embed_init_weight: 0.1
+    bias_initializer: "zeros"
+    init_rnn_orthogonal: False
+    lstm_forget_gate: 0.
+    encoder:
+        type: "lstm"
+        embeddings:
+            embedding_dim: 16
+            scale: False
+            freeze: True
+        hidden_size: 64
+        bidirectional: True
+        dropout: 0.1
+        num_layers: 1
+        freeze: True
+    decoder_1:
+        type: "lstm"
+        embeddings:
+            embedding_dim: 16
+            scale: False
+            freeze: True
+        hidden_size: 64
+        dropout: 0.1
+        hidden_dropout: 0.1
+        num_layers: 1
+        input_feeding: True
+        bridge: False
+        attention: "bahdanau"
+        freeze: True
+    decoder_2:
+        type: "lstm"
+        embeddings:
+            embedding_dim: 16
+            scale: False
+            freeze: True
+        hidden_size: 64
+        dropout: 0.1
+        hidden_dropout: 0.1
+        num_layers: 1
+        input_feeding: True
+        bridge: False
+        attention: "bahdanau"
+        freeze: False
+

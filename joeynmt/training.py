@@ -184,6 +184,10 @@ class TrainManager:
             self.logger.info("Loading model from {}".format(model_load_path))
             self.load_checkpoint(model_load_path)
 
+        trainable_params = [n for (n, p) in self.model.named_parameters()
+                            if p.requires_grad]
+        self.logger.info("Trainable parameters: {}".format(trainable_params))
+
     def save_checkpoint(self):
         """
         Save the model's current parameters and state to a checkpoint.
