@@ -174,6 +174,7 @@ class RecurrentDecoder(Decoder):
         # here we store all intermediate attention vectors (used for prediction)
         att_vectors = []
         att_probs = []
+        hidden_vectors = []
 
         # FIXME support not-input feeding
         batch_size = encoder_output.size(0)
@@ -194,13 +195,19 @@ class RecurrentDecoder(Decoder):
                 hidden=hidden)
             att_vectors.append(prev_att_vector)
             att_probs.append(att_prob)
+            if isinstance(hidden, tuple):  # lstm
+                hidden_vector = hidden[0][-1].unsqueeze(1)
+            else:
+                hidden_vector = hidden[-1].unsqueeze(1)  # [#layers, B, D] -> [B, 1, D]
+            hidden_vectors.append(hidden_vector)
 
         att_vectors = torch.cat(att_vectors, dim=1)
         att_probs = torch.cat(att_probs, dim=1)
+        hidden_vectors = torch.cat(hidden_vectors, dim=1)
         # att_probs: batch, max_len, src_length
         outputs = self.output_layer(att_vectors)
         # outputs: batch, max_len, vocab_size
-        return outputs, hidden, att_probs, att_vectors
+        return outputs, hidden, att_probs, att_vectors, hidden_vectors
 
     def init_hidden(self, encoder_final):
         """

@@ -27,7 +27,9 @@ class DeliberationModel(nn.Module):
                  src_embed: Embeddings = None,
                  trg_embed: Embeddings = None,
                  src_vocab: Vocabulary = None,
-                 trg_vocab: Vocabulary = None):
+                 trg_vocab: Vocabulary = None,
+                 d1_xent: float = 0.0,
+                 baseline: bool = False):
         """
         Create a new encoder-decoder-decoder (deliberation) model
         The first decoder attends the encoder,
@@ -39,6 +41,8 @@ class DeliberationModel(nn.Module):
         :param trg_embed:
         :param src_vocab:
         :param trg_vocab:
+        :param d1_xent: weighting for xent on first decoder
+        :param baseline: use baseline for rewards
         """
         super(DeliberationModel, self).__init__()
 
@@ -53,11 +57,13 @@ class DeliberationModel(nn.Module):
         self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
-        self.register_buffer('total_cost', torch.zeros([1]))
-        self.register_buffer('total_samples', torch.zeros([1]))
-
-        self.criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='none')
-
+        self.d1_xent = d1_xent
+        self.baseline = baseline
+        if self.baseline:
+            self.register_buffer('total_cost', torch.zeros([1]))
+            self.register_buffer('total_samples', torch.zeros([1]))
+        self.criterion = nn.NLLLoss(ignore_index=self.pad_index,
+                                    reduction='none')
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
@@ -74,17 +80,19 @@ class DeliberationModel(nn.Module):
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
         unrol_steps = trg_input.size(1)
-        dec1_outputs, dec1_hidden, dec1_att_probs, dec1_att_vectors = \
-            self.decode1(encoder_output=encoder_output,
-                           encoder_hidden=encoder_hidden,
-                           src_mask=src_mask, trg_input=trg_input,
-                           unrol_steps=unrol_steps)
+        dec1_outputs, dec1_hidden, dec1_att_probs, dec1_att_vectors, \
+        dec1_hidden_vectors = self.decode1(encoder_output=encoder_output,
+                                           encoder_hidden=encoder_hidden,
+                                           src_mask=src_mask,
+                                           trg_input=trg_input,
+                                           unrol_steps=unrol_steps)
         #print("dec1_hidden", dec1_hidden[0].shape)  # 1x batch x hidden size
         #print("dec1_outputs", dec1_outputs.shape)  # batch x length x vocab
         #print("dec_att_vectors", dec1_att_vectors.shape)  # batch x length x hidden
+        #print("dec_hidden_vectors", dec1_hidden_vectors.shape)  # batch x length x hidden
         # TODO pass on outputs or hidden? paper says hidden states
         # what if we use attentional vectors instead? (would also contain context)
-        d1_states = dec1_att_vectors.detach()  # don't backprop from d2 through d1
+        d1_states = dec1_hidden_vectors
         # TODO original paper uses beam seach with k=2 here, let's use greedy search for efficiency
         d1_greedy = torch.argmax(dec1_outputs, dim=-1).detach()  # don't backprop through here
         d1_predictions = d1_greedy # TODO backprop through embeddings though?  # batch x max_length
@@ -103,7 +111,7 @@ class DeliberationModel(nn.Module):
                                     src_mask=src_mask, trg_input=trg_input,
                                     unrol_steps=unrol_steps,
                                     trg_mask=trg_mask,
-                                    d1_states=d1_states,
+                                    d1_states=d1_states.detach(), # don't backprop from d2 through d1
                                     d1_predictions=d1_predictions)
         #print("src att1", dec1_att_probs)
         #print("src_att2", dec2_outputs[3])
@@ -184,7 +192,9 @@ class DeliberationModel(nn.Module):
         # standard xent, ignores padding
         batch_size = batch.trg.shape[0]
         # loss for each batch
-        d2_ref_neglogprobs = self.criterion(input=d2_log_probs.contiguous().view(-1, d2_log_probs.size(-1)), target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
+        d2_ref_neglogprobs = self.criterion(
+            input=d2_log_probs.contiguous().view(-1, d2_log_probs.size(-1)),
+            target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
         assert d2_ref_neglogprobs.shape == torch.Size([batch_size])
 
         # d1
@@ -196,12 +206,6 @@ class DeliberationModel(nn.Module):
             target=d1_predictions.contiguous().view(-1)).view(batch_size, -1).sum(-1)
         assert d1_pred_neglogprobs.shape == torch.Size([batch_size])
 
-        # also add standard xent loss for 1s decoder to keep it stable
-        d1_ref_neglogprobs = self.criterion(input=d1_log_probs.contiguous().view(-1, d1_log_probs.size(-1)),
-            target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
-        assert d1_ref_neglogprobs.shape == torch.Size([batch_size])
-
-
         # don't backprop through d2 for d1's parameters
         # d2's likelihood is the reward for d1 (padding not included) -> neg ll is cost, since we do minimization
         #print("d2 neg log prob", d2_ref_neglogprobs)
@@ -210,15 +214,23 @@ class DeliberationModel(nn.Module):
         # FIXME neg log likelihood is huge in the beginning
         cost = d2_ref_neglogprobs.detach()
 
-        # update running sums to compute baseline
-        #self.total_samples += batch.ntokens
-        #self.total_cost += cost
-        #baseline = self.total_cost/self.total_samples
-        #print(cost, baseline)
-        #cost = cost - baseline
-       # print(cost)
+        if self.baseline:
+            # update running sums to compute baseline
+            self.total_samples += batch_size
+            self.total_cost += cost.sum(-1)
+            baseline = self.total_cost / self.total_samples
+            cost -= baseline
 
-        d1_loss = d1_pred_neglogprobs*cost + d1_ref_neglogprobs
+        d1_loss = d1_pred_neglogprobs*cost
+        if self.d1_xent > 0.0:
+            # also add standard xent loss for 1st decoder to keep it stable
+            d1_ref_neglogprobs = self.criterion(
+                input=d1_log_probs.contiguous().view(-1, d1_log_probs.size(-1)),
+                target=batch.trg.contiguous().view(-1)).view(batch_size,
+                                                             -1).sum(-1)
+            assert d1_ref_neglogprobs.shape == torch.Size([batch_size])
+            d1_loss += self.d1_xent * d1_ref_neglogprobs
+
         d2_loss = d2_ref_neglogprobs
         #print(d1_loss, d2_loss)
 
@@ -226,6 +238,7 @@ class DeliberationModel(nn.Module):
         # https://blog.millionintegrals.com/vel-pytorch-meets-baselines/
 
         batch_loss = (d1_loss + d2_loss).sum()  # sum over batch
+        #print(d1_loss.sum(), d2_loss.sum())
 
         # add lm loss (optional)
         if lm_output is not None:
@@ -253,7 +266,6 @@ class DeliberationModel(nn.Module):
 
         return batch_loss
 
-
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """
         Get outputs and attentions scores for a given batch
@@ -274,7 +286,6 @@ class DeliberationModel(nn.Module):
 
         # TODO for inference use first decoder? (yes for our model, but no for deliberation
         # TODO make greedy and beam search handle multiple decoders
-        # TODO get outputs for both decoders!
         # greedy decoding
         if beam_size == 0:
           #  stacked_output1, stacked_attention_scores1 = greedy(
@@ -363,12 +374,13 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
     output = []
     attention_scores = []
     attention_vectors = []
+    hidden_vectors = []
     hidden = None
     prev_att_vector = None
     for t in range(max_output_length):
         # run 1st decoder
         # decode one single step
-        out, hidden, att_probs, prev_att_vector = decoder1(
+        out, hidden, att_probs, prev_att_vector, _ = decoder1(
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
             src_mask=src_mask,
@@ -377,6 +389,11 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
             prev_att_vector=prev_att_vector,
             unrol_steps=1)
         # out: batch x time=1 x vocab (logits)
+        if isinstance(hidden, tuple):  # lstm
+            hidden_vector = hidden[0][-1].unsqueeze(1)
+        else:
+            hidden_vector = hidden[-1].unsqueeze(
+                1)  # [#layers, B, D] -> [B, 1, D]
 
         # greedy decoding: choose arg max over vocabulary in each step
         next_word = torch.argmax(out, dim=-1)  # batch x time=1
@@ -384,12 +401,14 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
         prev_y = next_word
         attention_scores.append(att_probs.squeeze(1))
         attention_vectors.append(prev_att_vector.squeeze(1))
+        hidden_vectors.append(hidden_vector.squeeze(1))
         # batch, max_src_lengths
     stacked_output = torch.stack(output, dim=1)  # batch, time
     stacked_attention_scores = torch.stack(attention_scores, dim=1)
     stacked_attention_vectors = torch.stack(attention_vectors, dim=1)
+    stacked_hidden_vectors = torch.stack(hidden_vectors, dim=1)
 
-    d1_states = stacked_attention_vectors
+    d1_states = stacked_hidden_vectors
     d1_greedy = stacked_output
     d1_predictions = d1_greedy
 

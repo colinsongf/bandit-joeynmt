@@ -34,8 +34,9 @@ def build_model(cfg: dict = None,
     else:
         # embeddings for all decoders
         # TODO taken from first decoder
+        decoder_names = sorted(decoders)
         trg_embed = Embeddings(
-            **cfg[decoders[0]]["embeddings"], vocab_size=len(trg_vocab),
+            **cfg[decoder_names[0]]["embeddings"], vocab_size=len(trg_vocab),
             padding_idx=trg_padding_idx)
 
     encoder = RecurrentEncoder(**cfg["encoder"], vocab_size=len(src_vocab),
@@ -68,7 +69,9 @@ def build_model(cfg: dict = None,
         model = DeliberationModel(encoder=encoder, decoder1=decoder1,
                                   decoder2=decoder2, src_embed=src_embed,
                                   trg_embed=trg_embed, src_vocab=src_vocab,
-                                  trg_vocab=trg_vocab)
+                                  trg_vocab=trg_vocab,
+                                  d1_xent=cfg.get("d1_xent", 0.0),
+                                  baseline=cfg.get("baseline", False))
 
     # custom initialization of model parameters
     initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
@@ -203,11 +206,12 @@ class Model(nn.Module):
             print("predicted", predictions[0])
             lm_logprobs = F.log_softmax(lm_output, dim=-1)
             # shift inputs to the left for loss targets, ignore last hidden state
-            lm_loss = criterion(
+            lm_loss = self.criterion(
                 input=lm_logprobs[:, :-1].contiguous().view(-1,
                                                             lm_logprobs.size(
                                                                 -1)),
-                target=batch.src[:, 1:].contiguous().view(-1))
+                target=batch.src[:, 1:].contiguous().view(-1)).sum()
+            # TODO check if still correct
             #print("MT loss:", batch_loss.data.cpu().numpy(), "LM loss:",
             #      lm_loss.data.cpu().numpy(), "weighted LM loss:", self.encoder.lm_task*lm_loss.data.cpu().numpy())
             batch_loss += self.encoder.lm_task*lm_loss  # weighted
