@@ -72,7 +72,7 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
     bias_init_weight = float(cfg.get("bias_init_weight", 0.01))
 
     scale_src_emb = cfg["encoder"]["embeddings"].get("scale", False)
-    decoders = [k for k in cfg.keys() if "decoder" in k]
+    decoders = sorted([k for k in cfg.keys() if "decoder" in k])
     scale_trg_emb = cfg[decoders[0]]["embeddings"].get("scale", False)
 
     def _parse_init(s, scale):
