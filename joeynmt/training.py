@@ -560,6 +560,10 @@ class TrainManager:
             for param_group in self.optimizer.param_groups:
                 current_lrs.append(param_group['lr'])
             # stop if all lrs are smaller than minimum
+            if type(self.learning_rate_min) is not list:
+                self.learning_rate_min = [self.learning_rate_min,
+                                          self.learning_rate_min,
+                                          self.learning_rate_min]
             self.stop = all([clr < minlr for clr, minlr in
                              zip(current_lrs, self.learning_rate_min)])
             current_lr = "{}".format(current_lrs)
