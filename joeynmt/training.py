@@ -235,10 +235,14 @@ class TrainManager:
                     new_param_dict["decoder2.d1_attention.query_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.query_layer.weight))
                     new_param_dict["decoder2.d1_attention.energy_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.energy_layer.weight))
 
-                if "total_sample" not in param_dict:
-                    # buffer for reward baselines
-                    new_param_dict["total_samples"] = torch.zeros_like(self.model.total_samples)
-                    new_param_dict["total_cost"] = torch.zeros_like(self.model.total_cost)
+                if self.model.baseline:
+                    if "total_sample" not in param_dict:
+                        # buffer for reward baselines
+                        new_param_dict["total_samples"] = torch.zeros_like(self.model.total_samples)
+                        new_param_dict["total_cost"] = torch.zeros_like(self.model.total_cost)
+                    else:
+                        new_param_dict["total_samples"] = param_dict["total_samples"]
+                        new_param_dict["total_cost"] = param_dict["total_cost"]
             else:
                 new_param_dict = param_dict
             self.model.load_state_dict(new_param_dict)
