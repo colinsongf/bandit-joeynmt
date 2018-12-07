@@ -33,6 +33,7 @@ class RecurrentEncoder(Encoder):
                  bidirectional: bool = True,
                  lm_task: float = 0,
                  vocab_size: int = None,
+                 freeze: bool = False,
                  **kwargs):
         """
         Create a new recurrent encoder.
@@ -44,6 +45,7 @@ class RecurrentEncoder(Encoder):
         :param bidirectional:
         :param lm_task: predict next word from fwd hidden states
         :param vocab_size: only needed if lm_task
+        :param freeze: do not update the parameters of this encoder
         :param kwargs:
         """
 
@@ -76,7 +78,10 @@ class RecurrentEncoder(Encoder):
 
         self._output_size = 2 * hidden_size if bidirectional else hidden_size
 
-
+        if freeze:
+            for n, p in self.named_parameters():
+                print("Not training {}".format(n))
+                p.requires_grad=False
 
     def forward(self, x, x_length, mask):
         """
