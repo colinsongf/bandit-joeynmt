@@ -53,19 +53,28 @@ class TrainManager:
                           "decoder1" not in name]
             print("Params1", param_set1_names)
             print("Params2", param_set2_names)
+            if type(learning_rate) == list:
+                assert len(learning_rate) == 2
+                learning_rate1, learning_rate2 = learning_rate
+                print("2 different learning rates: {}, {}".format(
+                    learning_rate1, learning_rate2))
+            else:
+                learning_rate1, learning_rate2 = learning_rate, learning_rate
             if train_config["optimizer"].lower() == "adam":
+                # TODO create 1 optimizer with 2 param groups!
+                # see https://pytorch.org/docs/stable/optim.html
                 self.optimizer1 = torch.optim.Adam(
                     params=param_set1, weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=learning_rate1)
                 self.optimizer2 = torch.optim.Adam(
                     params=param_set2, weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=learning_rate2)
             else:
                 # default
                 self.optimizer1 = torch.optim.SGD(
-                    params=param_set1, weight_decay=weight_decay, lr=learning_rate)
+                    params=param_set1, weight_decay=weight_decay, lr=learning_rate1)
                 self.optimizer2 = torch.optim.SGD(
-                    params=param_set2, weight_decay=weight_decay, lr=learning_rate)
+                    params=param_set2, weight_decay=weight_decay, lr=learning_rate2)
         else:
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer = torch.optim.Adam(
@@ -589,13 +598,27 @@ class TrainManager:
         """
         current_lr = -1
         if isinstance(self.model, DeliberationModel):
+            if type(self.learning_rate_min) == list:
+                learning_rate_min1, learning_rate_min2 = self.learning_rate_min
+            else:
+                learning_rate_min1, learning_rate_min2 = \
+                    self.learning_rate_min, self.learning_rate_min,
             # ignores other param groups for now
             for param_group in self.optimizer1.param_groups:
                 current_lr1 = param_group['lr']
             for param_group in self.optimizer2.param_groups:
                 current_lr2 = param_group['lr']
-            if current_lr1 < self.learning_rate_min and current_lr2 < self.learning_rate_min:
+            # TODO stop training one after the other
+            #print("OPT1", self.optimizer1.param_groups)
+            #print("OPT2", self.optimizer2.param_groups)
+            if current_lr1 < learning_rate_min1 and current_lr2 < learning_rate_min2:
                 self.stop = True
+            elif current_lr1 < learning_rate_min1:
+                # TODO only stop training the parameters in this group
+                pass
+            elif current_lr2 < learning_rate_min2:
+                # TODO
+                pass
             current_lr = "{} | {}".format(current_lr1, current_lr2)
 
         else:

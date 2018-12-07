@@ -33,6 +33,7 @@ def build_model(cfg: dict = None,
         trg_embed = src_embed
     else:
         # embeddings for all decoders
+        # TODO taken from first decoder
         trg_embed = Embeddings(
             **cfg[decoders[0]]["embeddings"], vocab_size=len(trg_vocab),
             padding_idx=trg_padding_idx)
@@ -55,10 +56,12 @@ def build_model(cfg: dict = None,
     elif len(decoders) == 2:
         # deliberation network
         print("DELIBERATION NETWORK")
-        decoder1 = RecurrentDecoder(**cfg[decoders[0]], encoder=encoder,
+        decoder1, decoder2 = sorted(decoders)
+
+        decoder1 = RecurrentDecoder(**cfg[decoder1], encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
-        decoder2 = RecurrentDeliberationDecoder(**cfg[decoders[1]], encoder=encoder,
+        decoder2 = RecurrentDeliberationDecoder(**cfg[decoder2], encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
 
