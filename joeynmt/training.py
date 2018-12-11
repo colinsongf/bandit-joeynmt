@@ -54,6 +54,10 @@ class TrainManager:
                           "decoder2" in name]
             param_enc_names = [name for name, p in model.named_parameters() if
                                 "encoder" in name or "src_embed" in name]
+            if type(self.learning_rate_min) is not list:
+                self.learning_rate_min = [self.learning_rate_min,
+                                          self.learning_rate_min,
+                                          self.learning_rate_min]
             if type(learning_rate) == list:
                 assert len(learning_rate) == 3
                 learning_rate1, learning_rate2, learning_rate3 = learning_rate
@@ -561,10 +565,6 @@ class TrainManager:
             for param_group in self.optimizer.param_groups:
                 current_lrs.append(param_group['lr'])
             # stop if all lrs are smaller than minimum
-            if type(self.learning_rate_min) is not list:
-                self.learning_rate_min = [self.learning_rate_min,
-                                          self.learning_rate_min,
-                                          self.learning_rate_min]
             self.stop = all([clr < minlr for clr, minlr in
                              zip(current_lrs, self.learning_rate_min)])
             current_lr = "{}".format(current_lrs)
