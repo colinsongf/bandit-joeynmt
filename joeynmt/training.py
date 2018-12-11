@@ -103,6 +103,7 @@ class TrainManager:
                 self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer=self.optimizer,
                     mode=scheduler_mode,
+                    min_lr=self.learning_rate_min,
                     verbose=True,
                     threshold_mode='abs',
                     factor=train_config.get("decrease_factor", 0.1),
