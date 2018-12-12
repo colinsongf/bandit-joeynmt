@@ -180,7 +180,7 @@ class Model(nn.Module):
             src=batch.src, trg_input=batch.trg_input,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
 
-        out, hidden, att_probs, _ = decoder_output
+        out, hidden, att_probs, _, _ = decoder_output
 
         # compute log probs
         log_probs = F.log_softmax(out, dim=-1)
