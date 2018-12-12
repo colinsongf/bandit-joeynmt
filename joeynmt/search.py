@@ -28,7 +28,7 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
     prev_att_vector = None
     for t in range(max_output_length):
         # decode one single step
-        out, hidden, att_probs, prev_att_vector = decoder(
+        out, hidden, att_probs, prev_att_vector, _ = decoder(
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
             src_mask=src_mask,
@@ -116,7 +116,7 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
         # expand current hypotheses
         # decode one single step
         # out: logits for final softmax
-        out, hidden, att_scores, att_vectors = decoder(
+        out, hidden, att_scores, att_vectors, _ = decoder(
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
             src_mask=src_mask,
