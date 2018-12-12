@@ -104,7 +104,6 @@ class TrainManager:
                 train_config["scheduling"]:
             if train_config["scheduling"].lower() == "plateau":
                 # learning rate scheduler
-                print(self.learning_rate_min)
                 self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer=self.optimizer,
                     mode=scheduler_mode,
@@ -113,7 +112,6 @@ class TrainManager:
                     threshold_mode='abs',
                     factor=train_config.get("decrease_factor", 0.1),
                     patience=train_config.get("patience", 10))
-                assert len(self.scheduler.min_lrs) == len(self.learning_rate_min)
             elif train_config["scheduling"].lower() == "decaying":
                 self.scheduler = torch.optim.lr_scheduler.StepLR(
                     optimizer=self.optimizer,
