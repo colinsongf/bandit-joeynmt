@@ -212,6 +212,7 @@ class DeliberationModel(nn.Module):
         #print("norm", d2_ref_neglogprobs/batch.ntokens)
         #print("d1_pred_neglo", d1_pred_neglogprobs)
         # FIXME neg log likelihood is huge in the beginning
+        # TODO normalize by sent. length?
         cost = d2_ref_neglogprobs.detach()
 
         if self.baseline:
