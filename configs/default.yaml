@@ -58,6 +58,7 @@ model:  # specify your model architecture here
         num_layers: 3 # stack this many layers of equal size, default: 1
     decoder:
         type: "gru"
+        output_layer_type: "luong"
         embeddings:
             embedding_dim: 16
             scale: False

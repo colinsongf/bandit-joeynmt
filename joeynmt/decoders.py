@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch import Tensor
 from joeynmt.attention import BahdanauAttention, LuongAttention, AttentionMechanism
 from joeynmt.encoders import Encoder
-
+from joeynmt.maxout import Maxout
 
 # TODO make general decoder class
 class Decoder(nn.Module):
@@ -26,6 +26,7 @@ class RecurrentDecoder(Decoder):
                  hidden_dropout: float = 0.,
                  bridge: bool = False,
                  input_feeding: bool = True,
+                 output_layer_type: str = "luong",
                  **kwargs):
         """
         Create a recurrent decoder.
@@ -44,9 +45,11 @@ class RecurrentDecoder(Decoder):
         :param bridge:
         :param input_feeding:
         :param kwargs:
+        :param output_layer_type: type of output layer. Options: luong, weiss, simple, deep, maxout
         """
 
         super(RecurrentDecoder, self).__init__()
+        print("OUTPUT LAYER", output_layer_type)
 
         self.rnn_input_dropout = torch.nn.Dropout(p=dropout, inplace=False)
         self.type = type
@@ -67,12 +70,43 @@ class RecurrentDecoder(Decoder):
         self.rnn = rnn(self.rnn_input_size, hidden_size, num_layers,
                        batch_first=True,
                        dropout=dropout if num_layers > 1 else 0.)
+        self.output_layer_type = output_layer_type
+        # we use the same output layer input size for all models (except for weiss)
+        self.output_layer_input_size = hidden_size
 
-        # combine output with context vector before output layer (Luong-style)
         self.att_vector_layer = nn.Linear(
             hidden_size + encoder.output_size, hidden_size, bias=True)
 
-        self.output_layer = nn.Linear(hidden_size, vocab_size, bias=False)
+        if self.output_layer_type.lower() == "luong":
+            # combine output with context vector before output layer (Luong-style)
+            # W_o \text{tanh}(W_i[c_t, s_t])
+            # no additional parameters needed, already used for attention vector
+            pass
+
+        elif self.output_layer_type.lower() == "simple":
+            # W_o s_t
+            # no additional parameters needed
+            pass
+        elif self.output_layer_type.lower() in "maxout":
+            # maxout: W_o\, \text{maxout}(W_i[s_{t-1}, Ey_{t-1}, c_t])
+            # create maxout layer
+            self.maxout_layer = Maxout(
+                d_in=hidden_size + emb_size + encoder.output_size,
+                d_out=hidden_size, pool_size=2)
+
+        elif self.output_layer_type.lower() == "deep":
+            # deep: W_o\, \text{tanh}(W_i[s_t, Ey_{t-1}, c_t])
+            self.pre_output_layer = nn.Linear(
+                hidden_size + emb_size + encoder.output_size,
+                hidden_size, bias=True)
+
+        elif self.output_layer_type.lower() == "weiss":
+            # W_o [o_t , c_t]
+            # no additional params needed, but output layer has to get increased
+            self.output_layer_input_size = hidden_size + encoder.output_size
+
+        self.output_layer = nn.Linear(self.output_layer_input_size,
+                                      vocab_size, bias=False)
         self.output_size = vocab_size
 
         if attention == "bahdanau":
@@ -149,7 +183,7 @@ class RecurrentDecoder(Decoder):
         att_vector = torch.tanh(self.att_vector_layer(att_vector_input))
 
         # output: batch x 1 x dec_size
-        return att_vector, hidden, att_probs
+        return att_vector, hidden, att_probs, context
 
     def forward(self, trg_embed, encoder_output, encoder_hidden,
                 src_mask, unrol_steps, hidden=None, prev_att_vector=None):
@@ -166,9 +200,23 @@ class RecurrentDecoder(Decoder):
         :return:
         """
 
+        # here we store all intermediate attention vectors (used for prediction)
+        att_vectors = []
+        att_probs = []
+        hidden_vectors = []
+        att_contexts = []
+
         # initialize decoder hidden state from final encoder hidden state
         if hidden is None:
             hidden = self.init_hidden(encoder_hidden)
+
+        if self.output_layer_type == "maxout":
+            # use previous hidden state, not current hidden state for prediction
+            if hidden.shape[0] == 2:
+                hidden_vectors.append(hidden[0].unsqueeze(1))
+            else:
+                hidden_vectors.append(hidden.unsqueeze(1))
+
 
         # pre-compute projected encoder outputs
         # (the "keys" for the attention mechanism)
@@ -176,9 +224,7 @@ class RecurrentDecoder(Decoder):
         if hasattr(self.attention, "compute_proj_keys"):
             self.attention.compute_proj_keys(encoder_output)
 
-        # here we store all intermediate attention vectors (used for prediction)
-        att_vectors = []
-        att_probs = []
+
 
         batch_size = encoder_output.size(0)
 
@@ -190,7 +236,7 @@ class RecurrentDecoder(Decoder):
         # unroll the decoder RN N for max_len steps
         for i in range(unrol_steps):
             prev_embed = trg_embed[:, i].unsqueeze(1)  # batch, 1, emb
-            prev_att_vector, hidden, att_prob = self._forward_step(
+            prev_att_vector, hidden, att_prob, att_context = self._forward_step(
                 prev_embed=prev_embed,
                 prev_att_vector=prev_att_vector,
                 encoder_output=encoder_output,
@@ -198,11 +244,46 @@ class RecurrentDecoder(Decoder):
                 hidden=hidden)
             att_vectors.append(prev_att_vector)
             att_probs.append(att_prob)
+            if hidden.shape[0]==2:
+                hidden_vectors.append(hidden[0].unsqueeze(1))
+            else:
+                hidden_vectors.append(hidden.unsqueeze(1))
+            att_contexts.append(att_context)
 
         att_vectors = torch.cat(att_vectors, dim=1)
         att_probs = torch.cat(att_probs, dim=1)
+        hidden_vectors = torch.cat(hidden_vectors, dim=1)
+        att_contexts = torch.cat(att_contexts, dim=1)
         # att_probs: batch, max_len, src_length
-        outputs = self.output_layer(att_vectors)
+
+        if self.output_layer_type == "luong":
+            outputs = self.output_layer(att_vectors)
+
+        elif self.output_layer_type == "simple":
+            outputs = self.output_layer(hidden_vectors)
+
+        elif self.output_layer_type == "maxout":
+            # TODO they also use the previous hidden state in attention, not the current one
+            outputs = self.output_layer(
+                        self.maxout_layer( # remove last hidden state (shifted)
+                                torch.cat([hidden_vectors[:, :-1, :],
+                                           trg_embed, att_contexts],
+                                          dim=-1)
+                        )
+                    )
+
+        elif self.output_layer_type == "deep":
+            # TODO during testing, what's trg_embed? need to be predictions!
+            outputs = self.output_layer(
+                torch.tanh(
+                    self.pre_output_layer(
+                        torch.cat([hidden_vectors, trg_embed, att_contexts],
+                                  dim=-1)
+                    )))
+
+        elif self.output_layer_type == "weiss":
+            outputs = self.output_layer(
+                torch.cat([hidden_vectors, att_contexts], dim=-1))
         # outputs: batch, max_len, vocab_size
         return outputs, hidden, att_probs, att_vectors
 
