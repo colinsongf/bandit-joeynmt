@@ -212,10 +212,10 @@ class RecurrentDecoder(Decoder):
 
         if self.output_layer_type == "maxout":
             # use previous hidden state, not current hidden state for prediction
-            if hidden.shape[0] == 2:
-                hidden_vectors.append(hidden[0].unsqueeze(1))
+            if isinstance(hidden, tuple):
+                hidden_vectors.append(hidden[0][-1].unsqueeze(1))
             else:
-                hidden_vectors.append(hidden.unsqueeze(1))
+                hidden_vectors.append(hidden[-1].unsqueeze(1))
 
 
         # pre-compute projected encoder outputs
@@ -244,10 +244,10 @@ class RecurrentDecoder(Decoder):
                 hidden=hidden)
             att_vectors.append(prev_att_vector)
             att_probs.append(att_prob)
-            if hidden.shape[0]==2:
-                hidden_vectors.append(hidden[0].unsqueeze(1))
+            if isinstance(hidden, tuple):
+                hidden_vectors.append(hidden[0][-1].unsqueeze(1))
             else:
-                hidden_vectors.append(hidden.unsqueeze(1))
+                hidden_vectors.append(hidden[-1].unsqueeze(1))
             att_contexts.append(att_context)
 
         att_vectors = torch.cat(att_vectors, dim=1)
