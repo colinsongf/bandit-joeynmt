@@ -82,6 +82,11 @@ class RecurrentDecoder(Decoder):
             # W_o \text{tanh}(W_i[c_t, s_t])
             # no additional parameters needed, already used for attention vector
             pass
+        
+        elif self.output_layer_type.lower() == "luong-maxout":
+            self.maxout_layer = Maxout(
+                d_in=hidden_size,
+                d_out=hidden_size, pool_size=2)
 
         elif self.output_layer_type.lower() == "simple":
             # W_o s_t
@@ -259,6 +264,11 @@ class RecurrentDecoder(Decoder):
         if self.output_layer_type == "luong":
             outputs = self.output_layer(att_vectors)
 
+        elif self.output_layer_type == "luong-maxout":
+            outputs = self.output_layer(
+                        self.maxout_layer(att_vectors)
+                      )
+
         elif self.output_layer_type == "simple":
             outputs = self.output_layer(hidden_vectors)
 
@@ -266,7 +276,7 @@ class RecurrentDecoder(Decoder):
             # TODO they also use the previous hidden state in attention, not the current one
             outputs = self.output_layer(
                         self.maxout_layer( # remove last hidden state (shifted)
-                                torch.cat([hidden_vectors[:, :-1, :],
+                                torch.cat([hidden_vectors[:, 1:, :],
                                            trg_embed, att_contexts],
                                           dim=-1)
                         )
