@@ -283,7 +283,6 @@ class RecurrentDecoder(Decoder):
                     )
 
         elif self.output_layer_type == "deep":
-            # TODO during testing, what's trg_embed? need to be predictions!
             outputs = self.output_layer(
                 torch.tanh(
                     self.pre_output_layer(
