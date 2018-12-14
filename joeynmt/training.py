@@ -472,9 +472,9 @@ class TrainManager:
             self.optimizer.step()
             self.optimizer.zero_grad()
 
-        print("corrector loss", (corrector_loss).detach().numpy())
-        print("xent loss", norm_batch_loss.detach().numpy())
-        print("corr/xent loss",(corrector_loss).detach().numpy()/norm_batch_loss.detach().numpy())
+        print("corrector loss", (corrector_loss).detach().cpu().numpy())
+        print("xent loss", norm_batch_loss.detach().cpu().numpy())
+        print("corr/xent loss",(corrector_loss).cpu().detach().numpy()/norm_batch_loss.cpu().detach().numpy())
 
         # increment step and token counter
         self.steps += 1
