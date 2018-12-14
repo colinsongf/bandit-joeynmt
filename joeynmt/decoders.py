@@ -99,7 +99,8 @@ class RecurrentDecoder(Decoder):
                       prev_att_vector: Tensor = None,  # context or att vector
                       encoder_output: Tensor = None,
                       src_mask: Tensor = None,
-                      hidden: Tensor = None):
+                      hidden: Tensor = None,
+                      correction: Tensor = None):
         """
         Perform a single decoder step (1 word)
 
@@ -108,6 +109,7 @@ class RecurrentDecoder(Decoder):
         :param encoder_output:
         :param src_mask:
         :param hidden:
+        :param correction: added to hidden state (query)
         :return:
         """
 
@@ -130,8 +132,12 @@ class RecurrentDecoder(Decoder):
 
         # use new (top) decoder layer as attention query
         if isinstance(hidden, tuple):
+            if correction is not None:
+                hidden[0][-1] += correction
             query = hidden[0][-1].unsqueeze(1)
         else:
+            if correction is not None:
+                hidden[-1] += correction
             query = hidden[-1].unsqueeze(1)  # [#layers, B, D] -> [B, 1, D]
 
         # compute context vector using attention mechanism
@@ -152,7 +158,8 @@ class RecurrentDecoder(Decoder):
         return att_vector, hidden, att_probs
 
     def forward(self, trg_embed, encoder_output, encoder_hidden,
-                src_mask, unrol_steps, hidden=None, prev_att_vector=None):
+                src_mask, unrol_steps, hidden=None, prev_att_vector=None,
+                corrections=None):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
 
@@ -163,6 +170,7 @@ class RecurrentDecoder(Decoder):
         :param unrol_steps:
         :param hidden:
         :param prev_att_vector:
+        :param corrections: added to query (hidden state)
         :return:
         """
 
@@ -187,15 +195,20 @@ class RecurrentDecoder(Decoder):
                 prev_att_vector = encoder_output.new_zeros(
                     [batch_size, 1, self.hidden_size])
 
-        # unroll the decoder RN N for max_len steps
+        # unroll the decoder RNN for max_len steps
         for i in range(unrol_steps):
+            if corrections is not None:
+                correction = corrections[:, i, :]
+            else:
+                correction = None
             prev_embed = trg_embed[:, i].unsqueeze(1)  # batch, 1, emb
             prev_att_vector, hidden, att_prob = self._forward_step(
                 prev_embed=prev_embed,
                 prev_att_vector=prev_att_vector,
                 encoder_output=encoder_output,
                 src_mask=src_mask,
-                hidden=hidden)
+                hidden=hidden,
+                correction=correction)
             att_vectors.append(prev_att_vector)
             att_probs.append(att_prob)
 

@@ -41,13 +41,42 @@ class TrainManager:
             raise NotImplementedError("Loss is not implemented. Only xent.")
         learning_rate = train_config.get("learning_rate", 3.0e-4)
         weight_decay = train_config.get("weight_decay", 0)
-        if train_config["optimizer"].lower() == "adam":
-            self.optimizer = torch.optim.Adam(
-                model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+        if model.corrector is not None:
+            # 2 sets of parameters -> 2 optimizers
+            # TODO 2 learning rates
+            # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice
+            all_params = model.named_parameters()
+            corrector_params = {k:v for (k,v) in all_params if "corrector" in k}
+            self.corrector_params = corrector_params
+            print("CORRECTOR PARAMS", corrector_params.keys())
+            mt_params = {k:v for (k,v) in model.named_parameters()
+                         if k not in corrector_params.keys()}
+            print("MT PARAMS", mt_params.keys())
+            # TODO make corrector and mt models freezable
+            self.optimizer = {}
+            if train_config["optimizer"].lower() == "adam":
+                self.optimizer["mt"] = torch.optim.Adam(
+                    mt_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate)
+                self.optimizer["corrector"] = torch.optim.Adam(
+                    corrector_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate)
+            else:
+                # default
+                self.optimizer["mt"] = torch.optim.SGD(
+                    mt_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate)
+                self.optimizer["corrector"] = torch.optim.SGD(
+                    corrector_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate)
         else:
-            # default
-            self.optimizer = torch.optim.SGD(
-                model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+            if train_config["optimizer"].lower() == "adam":
+                self.optimizer = torch.optim.Adam(
+                    model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+            else:
+                # default
+                self.optimizer = torch.optim.SGD(
+                    model.parameters(), weight_decay=weight_decay, lr=learning_rate)
         self.schedule_metric = train_config.get("schedule_metric",
                                                 "eval_metric")
         self.ckpt_metric = train_config.get("ckpt_metric", "eval_metric")
@@ -67,23 +96,48 @@ class TrainManager:
         if "scheduling" in train_config.keys() and \
                 train_config["scheduling"]:
             if train_config["scheduling"].lower() == "plateau":
-                # learning rate scheduler
-                self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer=self.optimizer,
-                    mode=scheduler_mode,
-                    verbose=False,
-                    threshold_mode='abs',
-                    factor=train_config.get("decrease_factor", 0.1),
-                    patience=train_config.get("patience", 10))
+                if model.corrector is not None:
+                    # 2 schedulers
+                    self.scheduler = {k: torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=v,
+                        mode=scheduler_mode,
+                        verbose=False,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
+                                      for k, v in self.optimizer.items()}
+                else:
+                    # learning rate scheduler
+                    self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=self.optimizer,
+                        mode=scheduler_mode,
+                        verbose=False,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
             elif train_config["scheduling"].lower() == "decaying":
-                self.scheduler = torch.optim.lr_scheduler.StepLR(
-                    optimizer=self.optimizer,
-                    step_size=train_config.get("decaying_step_size", 10))
+                if model.corrector is not None:
+                    # 2 schedulers
+                    self.scheduler = {k: torch.optim.lr_scheduler.StepLR(
+                        optimizer=v,
+                        step_size=train_config.get("decaying_step_size", 10))
+                                      for k, v in self.optimizer.items()}
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.StepLR(
+                        optimizer=self.optimizer,
+                        step_size=train_config.get("decaying_step_size", 10))
             elif train_config["scheduling"].lower() == "exponential":
-                self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                    optimizer=self.optimizer,
-                    gamma=train_config.get("decrease_factor", 0.99)
-                )
+                if model.corrector is not None:
+                    # 2 schedulers
+                    self.scheduler = {k: torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=v,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    ) for k, v in self.optimizer}
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=self.optimizer,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    )
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
@@ -139,10 +193,17 @@ class TrainManager:
             "best_ckpt_score": self.best_ckpt_score,
             "best_ckpt_iteration": self.best_ckpt_iteration,
             "model_state": self.model.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
-            "scheduler_state": self.scheduler.state_dict() if \
-            self.scheduler is not None else None,
         }
+        if type(self.optimizer) is not dict:
+            state["optimizer_state"] = self.optimizer.state_dict()
+            state["scheduler_state"] = self.scheduler.state_dict() if \
+                self.scheduler is not None else None
+        else:
+            for k,v in self.optimizer.items():
+                state["{}_optimizer_state".format(k)] = v.state_dict()
+            for k,v in self.scheduler.items():
+                state["{}_scheduler_state".format(k)] = v.state_dict()
+                #if self.scheduler is not None else None,
         torch.save(state, model_path)
 
     def load_checkpoint(self, path):
@@ -285,7 +346,11 @@ class TrainManager:
                         # schedule based on evaluation score
                         schedule_score = valid_score
                     if self.scheduler is not None:
-                        self.scheduler.step(schedule_score)
+                        if type(self.scheduler) is dict:
+                            pass
+                            # TODO
+                        else:
+                            self.scheduler.step(schedule_score)
 
                     # append to validation report
                     self._add_report(
@@ -348,7 +413,8 @@ class TrainManager:
         :param batch:
         :return:
         """
-        batch_loss = self.model.get_loss_for_batch(
+        # standard xent loss
+        batch_loss = self.model.get_xent_loss_for_batch(
             batch=batch, criterion=self.criterion)
 
         # normalize batch loss
@@ -362,14 +428,53 @@ class TrainManager:
         norm_batch_loss = batch_loss.sum() / normalizer
         # compute gradient
         norm_batch_loss.backward()
+        # grads for corrector params are zero here
+        #print("grad norms after Xent", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
+
+        # compute corrector loss separately
+        # with torch.autograd.grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=False, only_inputs=True, allow_unused=False)
+        corrector_loss = self.model.get_corr_loss_for_batch(
+            batch=batch, criterion=self.criterion)
+
+        corrector_loss /= normalizer
+
+        # TODO add RL loss! gain in BLEU
+        #inputs = self.corrector_params.values()
+        #print("INPUT", inputs)
+        grads = {}
+        #grads = torch.autograd.grad(corrector_loss, inputs=inputs)
+        #print(grads)
+        for name, param in self.corrector_params.items():
+            # compute the gradient of the loss wrt to each of the params
+            grad = torch.autograd.grad(corrector_loss/batch_loss.detach(), inputs=param, retain_graph=True)[0]
+            #print(grad) # output is a tuple
+            grads[name] = grad
+            assert grad.shape == param.shape
+            param.grad = grad
+        #print(torch.autograd.grad(corrector_loss, inputs=inputs))
+        #print("grad norms for corr: ", [(k, torch.norm(v, 2)) for k, v in grads.items()])
+
+        print("grad norms all", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters()])
 
         if self.clip_grad_fun is not None:
             # clip gradients (in-place)
             self.clip_grad_fun(params=self.model.parameters())
 
         # make gradient step
-        self.optimizer.step()
-        self.optimizer.zero_grad()
+        if type(self.optimizer) is dict:
+            # TODO why even have two optimizers??
+            # TODO to have 2 lr
+            self.optimizer["mt"].step()
+            self.optimizer["corrector"].step()
+            self.optimizer["mt"].zero_grad()
+            self.optimizer["corrector"].zero_grad()
+        else:
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+
+        print("corrector loss", (corrector_loss).detach().numpy())
+        print("xent loss", norm_batch_loss.detach().numpy())
+        print("corr/xent loss",(corrector_loss).detach().numpy()/norm_batch_loss.detach().numpy())
 
         # increment step and token counter
         self.steps += 1
@@ -390,16 +495,26 @@ class TrainManager:
         """
         current_lr = -1
         # ignores other param groups for now
-        for param_group in self.optimizer.param_groups:
-            current_lr = param_group['lr']
+        if type(self.optimizer) is dict:
+            current_lr = {k: v.param_groups[0]["lr"] for
+                          k,v in self.optimizer.items()}
 
-        if current_lr < self.learning_rate_min:
-            self.stop = True
+        else:
+            for param_group in self.optimizer.param_groups:
+                current_lr = param_group['lr']
+
+        if type(current_lr) is dict:
+            # only stop if all learning rates have reached minimum
+            self.stop = all(
+                [v < self.learning_rate_min for v in current_lr.values()])
+        else:
+            if current_lr < self.learning_rate_min:
+                self.stop = True
 
         with open(self.valid_report_file, 'a') as opened_file:
             opened_file.write(
                 "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
-                "LR: {:.8f}\t{}\n".format(
+                "LR: {}\t{}\n".format(
                     self.steps, valid_loss, valid_ppl, eval_metric,
                     valid_score, current_lr, "*" if new_best else ""))
 
