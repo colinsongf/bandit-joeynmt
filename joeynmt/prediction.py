@@ -50,6 +50,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
             # TODO save computation: forward pass is computed twice
             # run as during training with teacher forcing
+            # TODO adapt!
             if criterion is not None and batch.trg is not None:
                 batch_loss = model.get_loss_for_batch(
                     batch, criterion=criterion)

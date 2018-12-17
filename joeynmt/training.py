@@ -44,31 +44,35 @@ class TrainManager:
         if model.corrector is not None:
             # 2 sets of parameters -> 2 optimizers
             # TODO 2 learning rates
+            # TODO proper logging
             # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice
             all_params = model.named_parameters()
             corrector_params = {k:v for (k,v) in all_params if "corrector" in k}
             self.corrector_params = corrector_params
             print("CORRECTOR PARAMS", corrector_params.keys())
+            print("CORRECTOR size", sum([np.prod(p.size()) for p in self.corrector_params.values()]))
             mt_params = {k:v for (k,v) in model.named_parameters()
                          if k not in corrector_params.keys()}
             print("MT PARAMS", mt_params.keys())
+            print("MT size", sum([np.prod(p.size()) for p in mt_params.values()]))
+
             # TODO make corrector and mt models freezable
             self.optimizer = {}
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer["mt"] = torch.optim.Adam(
                     mt_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=learning_rate["mt"])
                 self.optimizer["corrector"] = torch.optim.Adam(
                     corrector_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=learning_rate["corrector"])
             else:
                 # default
                 self.optimizer["mt"] = torch.optim.SGD(
                     mt_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=learning_rate["mt"])
                 self.optimizer["corrector"] = torch.optim.SGD(
                     corrector_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=learning_rate["corrector"])
         else:
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer = torch.optim.Adam(
@@ -439,6 +443,7 @@ class TrainManager:
         corrector_loss /= normalizer
 
         # TODO add RL loss! gain in BLEU
+        # TODO maybe penalize even more
         #inputs = self.corrector_params.values()
         #print("INPUT", inputs)
         grads = {}
@@ -446,7 +451,8 @@ class TrainManager:
         #print(grads)
         for name, param in self.corrector_params.items():
             # compute the gradient of the loss wrt to each of the params
-            grad = torch.autograd.grad(corrector_loss/batch_loss.detach(), inputs=param, retain_graph=True)[0]
+            grad = torch.autograd.grad(corrector_loss/batch_loss.detach(),
+                                       inputs=param, retain_graph=True)[0]
             #print(grad) # output is a tuple
             grads[name] = grad
             assert grad.shape == param.shape
@@ -462,8 +468,7 @@ class TrainManager:
 
         # make gradient step
         if type(self.optimizer) is dict:
-            # TODO why even have two optimizers??
-            # TODO to have 2 lr
+            # two optimizers with 2 different learning rates
             self.optimizer["mt"].step()
             self.optimizer["corrector"].step()
             self.optimizer["mt"].zero_grad()

@@ -274,6 +274,7 @@ class Model(nn.Module):
         if max_output_length is None:
             max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
 
+        # TODO add corrector!
         # greedy decoding
         if beam_size == 0:
             stacked_output, stacked_attention_scores = greedy(
