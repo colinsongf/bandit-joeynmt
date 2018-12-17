@@ -400,9 +400,6 @@ class RecurrentDeliberationDecoder(Decoder):
         d1_context, d1_att_probs = self.d1_attention(query=query,
                                                      values=d1_att_values,
                                                      mask=trg_mask)
-        #print("TRG MASK", trg_mask)
-        #print("D1 PROB", d1_att_probs)
-
         #print("p1_att_probs", d1_att_probs.shape)
 
         # return attention vector

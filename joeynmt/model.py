@@ -58,17 +58,22 @@ def build_model(cfg: dict = None,
         # deliberation network
         print("DELIBERATION NETWORK")
         decoder1, decoder2 = sorted(decoders)
+        # creating new target embeddings for decoder2
+        trg_embed2 = Embeddings(
+            **cfg[decoder2]["embeddings"], vocab_size=len(trg_vocab),
+            padding_idx=trg_padding_idx)
 
         decoder1 = RecurrentDecoder(**cfg[decoder1], encoder=encoder,
                                    vocab_size=len(trg_vocab),
                                    emb_size=trg_embed.embedding_dim)
         decoder2 = RecurrentDeliberationDecoder(**cfg[decoder2], encoder=encoder,
                                    vocab_size=len(trg_vocab),
-                                   emb_size=trg_embed.embedding_dim)
+                                   emb_size=trg_embed2.embedding_dim)
 
         model = DeliberationModel(encoder=encoder, decoder1=decoder1,
                                   decoder2=decoder2, src_embed=src_embed,
-                                  trg_embed=trg_embed, src_vocab=src_vocab,
+                                  trg_embed=trg_embed, trg_embed2=trg_embed2,
+                                  src_vocab=src_vocab,
                                   trg_vocab=trg_vocab,
                                   d1_xent=cfg.get("d1_xent", 0.0),
                                   baseline=cfg.get("baseline", False))

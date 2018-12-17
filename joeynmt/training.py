@@ -234,6 +234,11 @@ class TrainManager:
                 new_param_dict["decoder2.context_comb_layer.weight"] = init(torch.empty_like(self.model.decoder2.context_comb_layer.weight))
                 new_param_dict["decoder2.context_comb_layer.bias"] = init(torch.empty_like(self.model.decoder2.context_comb_layer.bias))
 
+                # new trg embed2 for 2nd decoder
+                new_param_dict["trg_embed2.lut.weight"] = init(
+                    torch.empty_like(
+                        self.model.trg_embed2.lut.weight))
+
                 new_param_dict["decoder2.d1_attention.key_layer.weight"] = init(torch.empty_like(self.model.decoder2.d1_attention.key_layer.weight))
                 if isinstance(self.model.decoder2.d1_attention, BahdanauAttention):
                     # LuongAttention doesn't have these

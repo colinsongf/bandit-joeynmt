@@ -26,6 +26,7 @@ class DeliberationModel(nn.Module):
                  decoder2: RecurrentDeliberationDecoder = None,
                  src_embed: Embeddings = None,
                  trg_embed: Embeddings = None,
+                 trg_embed2: Embeddings = None,
                  src_vocab: Vocabulary = None,
                  trg_vocab: Vocabulary = None,
                  d1_xent: float = 0.0,
@@ -39,6 +40,7 @@ class DeliberationModel(nn.Module):
         :param decoder:
         :param src_embed:
         :param trg_embed:
+        :param trg_embed2:
         :param src_vocab:
         :param trg_vocab:
         :param d1_xent: weighting for xent on first decoder
@@ -49,6 +51,7 @@ class DeliberationModel(nn.Module):
         self.name = name
         self.src_embed = src_embed
         self.trg_embed = trg_embed
+        self.trg_embed2 = trg_embed2
         self.encoder = encoder
         self.decoder1 = decoder1
         self.decoder2 = decoder2
@@ -101,10 +104,13 @@ class DeliberationModel(nn.Module):
         # zero out everything after last eos
         # eos indicator tensor: 1 if eos
         eos = torch.where(d1_greedy.eq(self.trg_vocab.stoi[EOS_TOKEN]), d1_greedy.new_full([1], 1), d1_greedy.new_full([1], 0))
-        # mask all positions after the first eos to 0 (cumsum of eoses is > 1)
-        trg_mask = torch.where(torch.cumsum(eos, dim=1).gt(1), d1_greedy.new_full([1], 0), d1_greedy.new_full([1], 1)).unsqueeze(1).byte()
-        #print("trg mask", trg_mask.shape)  # batch x 1 x max_length
-        # trg_mask = d1_states.new_ones(d1_states.shape[0], 1, d1_states.shape[1]).byte()
+        # mask all positions after the first eos to 0 (cumsum of eoses is >= 1)
+        after_eos = torch.where(torch.cumsum(eos, dim=1).ge(1),
+                                d1_greedy.new_full([1], 0),
+                                d1_greedy.new_full([1], 1)).unsqueeze(1).byte()
+        trg_mask = torch.where(torch.cumsum(after_eos, dim=1).gt(1),
+                               d1_greedy.new_full([1], 0),
+                               d1_greedy.new_full([1], 1)).byte()
 
         dec2_outputs = self.decode2(encoder_output=encoder_output,
                                     encoder_hidden=encoder_hidden,
@@ -155,10 +161,10 @@ class DeliberationModel(nn.Module):
     def decode2(self, encoder_output, encoder_hidden, src_mask, trg_input,
                 unrol_steps, d1_predictions, d1_states, trg_mask,
                 decoder_hidden=None):
-        return self.decoder2(trg_embed=self.trg_embed(trg_input),
+        return self.decoder2(trg_embed=self.trg_embed2(trg_input),
                              encoder_output=encoder_output,
                              encoder_hidden=encoder_hidden,
-                             d1_predictions=self.trg_embed(d1_predictions),
+                             d1_predictions=self.trg_embed2(d1_predictions),
                              d1_states=d1_states,
                              trg_mask=trg_mask,
                              src_mask=src_mask,
@@ -301,7 +307,7 @@ class DeliberationModel(nn.Module):
            #stacked_d1_attention_scores.cpu().numpy()
             stacked_output1, stacked_attention_scores, stacked_output2, stacked_src_attention_scores, stacked_d1_attention_scores = greedy_delib(
                 encoder_hidden=encoder_hidden, encoder_output=encoder_output,
-                src_mask=batch.src_mask, embed=self.trg_embed,
+                src_mask=batch.src_mask, embed=self.trg_embed, embed2=self.trg_embed2,
                 bos_index=self.bos_index, decoders=[self.decoder1, self.decoder2],
                 max_output_length=max_output_length, eos_index=self.trg_vocab.stoi[EOS_TOKEN])
             # batch, time, max_src_length
@@ -317,7 +323,7 @@ class DeliberationModel(nn.Module):
             stacked_output2, stacked_attention_scores2 = \
                 beam_search(size=beam_size, encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
-                            src_mask=batch.src_mask, embed=self.trg_embed,
+                            src_mask=batch.src_mask, embed=self.trg_embed2,
                             max_output_length=max_output_length,
                             alpha=beam_alpha, eos_index=self.eos_index,
                             pad_index=self.pad_index, bos_index=self.bos_index,
@@ -334,10 +340,11 @@ class DeliberationModel(nn.Module):
                "\tencoder=%r,\n" \
                "\tdecoder=%r,\n" \
                "\tsrc_embed=%r,\n" \
-               "\ttrg_embed=%r)" % (
+               "\ttrg_embed=%r,\n" \
+               "\ttrg_embed2=%r)" % (
                    self.__class__.__name__, str(self.encoder),
                    str(self.decoder),
-                   self.src_embed, self.trg_embed)
+                   self.src_embed, self.trg_embed, self.trg_embed2)
 
     def log_parameters_list(self, logging_function):
         """
@@ -353,7 +360,7 @@ class DeliberationModel(nn.Module):
                 logging_function("%s : %s" % (name, list(p.size())))
 
 
-def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
+def greedy_delib(src_mask, embed, embed2, bos_index, max_output_length, decoders,
            encoder_output, encoder_hidden, eos_index):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
@@ -417,10 +424,13 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
     # eos indicator tensor: 1 if eos
     eos = torch.where(d1_greedy.eq(eos_index),
                       d1_greedy.new_full([1], 1), d1_greedy.new_full([1], 0))
-    # mask all positions after the first eos to 0 (cumsum of eoses is > 1)
-    trg_mask = torch.where(torch.cumsum(eos, dim=1).gt(1),
+    # mask all positions after the first eos to 0 (cumsum of eoses is >= 1)
+    after_eos = torch.where(torch.cumsum(eos, dim=1).ge(1),
                            d1_greedy.new_full([1], 0),
                            d1_greedy.new_full([1], 1)).unsqueeze(1).byte()
+    trg_mask = torch.where(torch.cumsum(after_eos, dim=1).gt(1),
+                           d1_greedy.new_full([1], 0),
+                           d1_greedy.new_full([1], 1)).byte()
     output2 = []
     src_attention_scores = []
     d1_attention_scores = []
@@ -432,12 +442,12 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
         out2, hidden2, src_att_probs, d1_att_probs, comb_att_vectors = \
             decoder2(encoder_output=encoder_output,
                                 encoder_hidden=encoder_hidden,
-                                src_mask=src_mask, trg_embed=embed(prev_y2),
+                                src_mask=src_mask, trg_embed=embed2(prev_y2),
                                 unrol_steps=1,
                                 hidden=hidden2,
                                 trg_mask=trg_mask,
                                 d1_states=d1_states,
-                                d1_predictions=embed(d1_predictions),
+                                d1_predictions=embed2(d1_predictions),
                                 prev_comb_att_vector=prev_comb_att_vector)
 
         # greedy decoding: choose arg max over vocabulary in each step
@@ -457,8 +467,9 @@ def greedy_delib(src_mask, embed, bos_index, max_output_length, decoders,
                 stacked_d1_attention_scores.cpu().numpy()
 
 def beam_search_delib(decoders, size, bos_index, eos_index, pad_index, encoder_output,
-                encoder_hidden, src_mask, max_output_length, alpha, embed,
+                encoder_hidden, src_mask, max_output_length, alpha, embed, embed2,
                 n_best=1):
+    # TODO adapt to delib
     """
     Beam search with size k. Follows OpenNMT-py implementation.
     In each decoding step, find the k most likely partial hypotheses.
@@ -527,7 +538,7 @@ def beam_search_delib(decoders, size, bos_index, eos_index, pad_index, encoder_o
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
             src_mask=src_mask,
-            trg_embed=embed(decoder_input),
+            trg_embed=embed1(decoder_input),
             hidden=hidden,
             prev_att_vector=att_vectors,
             unrol_steps=1)
