@@ -158,6 +158,7 @@ class TrainManager:
         self.batch_size = train_config["batch_size"]
         self.criterion = criterion
         self.normalization = train_config.get("normalization", "batch")
+        self.normalize_corrector = train_config.get("normalize_corrector", False)
         self.steps = 0
         # stop training if this flag is True by reaching learning rate minimum
         self.stop = False
@@ -419,12 +420,12 @@ class TrainManager:
 
                     # store attention plots for first three sentences of
                     # valid data and one randomly chosen example
-                    random_examples = np.random.randint(
+                    random_example = np.random.randint(
                         0, len(valid_hypotheses))
                     store_attention_plots(attentions=valid_attention_scores,
                                           targets=valid_hypotheses_raw,
                                           sources=[s for s in valid_data.src],
-                                          idx=[0, 1, 2]+random_examples,
+                                          idx=[0, 1, 2, random_example],
                                           output_prefix="{}/att.{}".format(
                                               self.model_dir,
                                               self.steps))
@@ -432,7 +433,7 @@ class TrainManager:
                     store_attention_plots(attentions=corr_valid_attention_scores,
                                           targets=corr_valid_hypotheses_raw,
                                           sources=[s for s in valid_data.src],
-                                          idx=[0, 1, 2]+random_examples,
+                                          idx=[0, 1, 2, random_example],
                                           output_prefix="{}/corr.att.{}".format(
                                               self.model_dir,
                                               self.steps))
@@ -482,10 +483,11 @@ class TrainManager:
             self.logger.debug if not self.steps % self.logging_freq else None)
 
         # normalize per batch/token
-        corrector_loss /= normalizer
+        norm_corrector_loss = corrector_loss / normalizer
 
-        # use xent loss of decoder as factor to scale corrector loss
-        corrector_loss /= batch_loss.detach()
+        if self.normalize_corrector:
+            # use xent loss of decoder as factor to scale corrector loss
+            norm_corrector_loss /= batch_loss.detach()
 
         # TODO add RL loss! gain in BLEU
         # TODO maybe penalize even more
@@ -531,11 +533,11 @@ class TrainManager:
 
         if not self.steps % self.logging_freq:
             self.logger.debug("Corrector loss: {}".format(
-                              (corrector_loss).detach().cpu().numpy()))
+                              (corrector_loss/normalizer).detach().cpu().numpy()))
             self.logger.debug("Xent loss: {}".format(
                               norm_batch_loss.detach().cpu().numpy()))
             self.logger.debug("(corr/xent) loss: {}".format(
-                              (corrector_loss).cpu().detach().numpy()/
+                              (norm_corrector_loss).cpu().detach().numpy()/
                               norm_batch_loss.cpu().detach().numpy()))
 
         # increment step and token counter
