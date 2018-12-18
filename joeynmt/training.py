@@ -497,6 +497,9 @@ class TrainManager:
             # compute the gradient of the loss wrt to each of the params
             grad = torch.autograd.grad(corrector_loss,
                                        inputs=param, retain_graph=True)[0]
+            # gradient clipping
+            self.clip_grad_fun(params=param)
+
             #print(grad) # output is a tuple
             grads[name] = grad
             assert grad.shape == param.shape
