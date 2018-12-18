@@ -26,6 +26,7 @@ class RecurrentDecoder(Decoder):
                  hidden_dropout: float = 0.,
                  bridge: bool = False,
                  input_feeding: bool = True,
+                 freeze: bool = False,
                  **kwargs):
         """
         Create a recurrent decoder.
@@ -43,6 +44,7 @@ class RecurrentDecoder(Decoder):
         :param hidden_dropout:
         :param bridge:
         :param input_feeding:
+        :param freeze:
         :param kwargs:
         """
 
@@ -93,6 +95,11 @@ class RecurrentDecoder(Decoder):
         if self.bridge:
             self.bridge_layer = nn.Linear(
                 encoder.output_size, hidden_size, bias=True)
+
+        if freeze:
+            for n, p in self.named_parameters():
+                print("Not training {}".format(n))
+                p.requires_grad = False
 
     def _forward_step(self,
                       prev_embed: Tensor = None,

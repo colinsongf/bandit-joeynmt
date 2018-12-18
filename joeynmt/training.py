@@ -32,6 +32,10 @@ class TrainManager:
         """
         train_config = config["training"]
         self.model = model
+        self.overwrite = train_config.get("overwrite", False)
+        self.model_dir = self._make_model_dir(train_config["model_dir"])
+        self.valid_report_file = "{}/validations.txt".format(self.model_dir)
+        self.logger = self._make_logger()
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
         criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
@@ -43,20 +47,27 @@ class TrainManager:
         weight_decay = train_config.get("weight_decay", 0)
         if model.corrector is not None:
             # 2 sets of parameters -> 2 optimizers
-            # TODO 2 learning rates
-            # TODO proper logging
             # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice
             all_params = model.named_parameters()
             corrector_params = {k:v for (k,v) in all_params if "corrector" in k}
             self.corrector_params = corrector_params
-            print("CORRECTOR PARAMS", corrector_params.keys())
-            print("CORRECTOR size", sum([np.prod(p.size()) for p in self.corrector_params.values()]))
+            self.logger.debug(
+                "CORRECTOR PARAMS: {}".format(corrector_params.keys()))
+            self.logger.debug("CORRECTOR size: {}".format(
+                sum([np.prod(p.size()) for p in self.corrector_params.values()])
+            ))
             mt_params = {k:v for (k,v) in model.named_parameters()
                          if k not in corrector_params.keys()}
-            print("MT PARAMS", mt_params.keys())
-            print("MT size", sum([np.prod(p.size()) for p in mt_params.values()]))
+            self.logger.debug("MT PARAMS: {}".format(mt_params.keys()))
+            self.logger.debug("MT size: {}".format(
+                sum([np.prod(p.size()) for p in mt_params.values()])))
 
-            # TODO make corrector and mt models freezable
+            for k, v in model.named_parameters():
+                if v.requires_grad:
+                    self.logger.debug("Updating {}".format(k))
+                else:
+                    self.logger.debug("NOT Updating {}".format(k))
+
             self.optimizer = {}
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer["mt"] = torch.optim.Adam(
@@ -152,10 +163,6 @@ class TrainManager:
         self.stop = False
         self.total_tokens = 0
         self.max_output_length = train_config.get("max_output_length", None)
-        self.overwrite = train_config.get("overwrite", False)
-        self.model_dir = self._make_model_dir(train_config["model_dir"])
-        self.logger = self._make_logger()
-        self.valid_report_file = "{}/validations.txt".format(self.model_dir)
         self.use_cuda = train_config["use_cuda"]
         if self.use_cuda:
             self.model.cuda()
@@ -438,20 +445,23 @@ class TrainManager:
         # compute corrector loss separately
         # with torch.autograd.grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=False, only_inputs=True, allow_unused=False)
         corrector_loss = self.model.get_corr_loss_for_batch(
-            batch=batch, criterion=self.criterion)
+            batch=batch, criterion=self.criterion,
+            logging_fun=
+            self.logger.debug if not self.steps % self.logging_freq else None)
 
+        # normalize per batch/token
         corrector_loss /= normalizer
+
+        # use xent loss of decoder as factor to scale corrector loss
+        corrector_loss /= batch_loss.detach()
 
         # TODO add RL loss! gain in BLEU
         # TODO maybe penalize even more
-        #inputs = self.corrector_params.values()
-        #print("INPUT", inputs)
+
         grads = {}
-        #grads = torch.autograd.grad(corrector_loss, inputs=inputs)
-        #print(grads)
         for name, param in self.corrector_params.items():
             # compute the gradient of the loss wrt to each of the params
-            grad = torch.autograd.grad(corrector_loss/batch_loss.detach(),
+            grad = torch.autograd.grad(corrector_loss,
                                        inputs=param, retain_graph=True)[0]
             #print(grad) # output is a tuple
             grads[name] = grad
@@ -460,11 +470,21 @@ class TrainManager:
         #print(torch.autograd.grad(corrector_loss, inputs=inputs))
         #print("grad norms for corr: ", [(k, torch.norm(v, 2)) for k, v in grads.items()])
 
-        print("grad norms all", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters()])
+        if not self.steps % self.logging_freq:
+            self.logger.debug("Gradient norms (before clipping): {}".format(
+                              [(k, torch.norm(v.grad, 2)) for k, v
+                               in self.model.named_parameters()
+                               if v.grad is not None]).replace("),", "\n\t"))
 
         if self.clip_grad_fun is not None:
             # clip gradients (in-place)
             self.clip_grad_fun(params=self.model.parameters())
+
+        if not self.steps % self.logging_freq:
+            self.logger.debug("Gradient norms (after clipping): {}".format(
+                              [(k, torch.norm(v.grad, 2)) for k, v
+                               in self.model.named_parameters()
+                               if v.grad is not None]).replace("),", "\n\t"))
 
         # make gradient step
         if type(self.optimizer) is dict:
@@ -477,9 +497,14 @@ class TrainManager:
             self.optimizer.step()
             self.optimizer.zero_grad()
 
-        print("corrector loss", (corrector_loss).detach().cpu().numpy())
-        print("xent loss", norm_batch_loss.detach().cpu().numpy())
-        print("corr/xent loss",(corrector_loss).cpu().detach().numpy()/norm_batch_loss.cpu().detach().numpy())
+        if not self.steps % self.logging_freq:
+            self.logger.debug("Corrector loss: {}".format(
+                              (corrector_loss).detach().cpu().numpy()))
+            self.logger.debug("Xent loss: {}".format(
+                              norm_batch_loss.detach().cpu().numpy()))
+            self.logger.debug("(corr/xent) loss: {}".format(
+                              (corrector_loss).cpu().detach().numpy()/
+                              norm_batch_loss.cpu().detach().numpy()))
 
         # increment step and token counter
         self.steps += 1

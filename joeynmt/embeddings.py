@@ -12,7 +12,8 @@ class Embeddings(nn.Module):
                  embedding_dim: int = 64,
                  scale: bool = False,
                  vocab_size: int = 0,
-                 padding_idx: int = 1):
+                 padding_idx: int = 1,
+                 freeze: bool = False):
         """
         Create new embeddings for the vocabulary.
         Use scaling for the Transformer.
@@ -29,6 +30,10 @@ class Embeddings(nn.Module):
         self.vocab_size = vocab_size
         self.lut = nn.Embedding(vocab_size, self.embedding_dim,
                                 padding_idx=padding_idx)
+        if freeze:
+            for n, p in self.named_parameters():
+                print("Not training {}".format(n))
+                p.requires_grad = False
 
     def forward(self, x):
         if self.scale:

@@ -232,17 +232,24 @@ class Model(nn.Module):
         # return batch loss = sum over all elements in batch that are not pad
         return batch_loss
 
-    def get_corr_loss_for_batch(self, batch, criterion):
-        # TODO
-        greedy_pred, corrections, \
-        corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors = self.forward(
+    def get_corr_loss_for_batch(self, batch, criterion, logging_fun=None):
+        greedy_pred, corrections, corr_outputs, corr_hidden, \
+        corr_att_probs, corr_att_vectors = self.forward(
             src=batch.src, trg_input=batch.trg_input, correct=True,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
 
-        print("before corr", " ".join(arrays_to_sentences(greedy_pred, vocabulary=self.trg_vocab)[0]))
-        corr_pred = torch.argmax(corr_outputs, dim=2).cpu().numpy()
-        print("after corr", " ".join(arrays_to_sentences(corr_pred, vocabulary=self.trg_vocab)[0]))
-        print("ref", " ".join(arrays_to_sentences(batch.trg, vocabulary=self.trg_vocab)[0]))
+        if logging_fun is not None:
+            logging_fun("before corr: {}".format(
+                " ".join(arrays_to_sentences(
+                    greedy_pred, vocabulary=self.trg_vocab)[0])))
+            corr_pred = torch.argmax(corr_outputs, dim=2).cpu().numpy()
+            logging_fun("after corr: {}".format(
+                " ".join(arrays_to_sentences(
+                    corr_pred, vocabulary=self.trg_vocab)[0])))
+            logging_fun("ref: {}".format(
+                " ".join(arrays_to_sentences(
+                    batch.trg, vocabulary=self.trg_vocab)[0])))
+
         # loss for correction is log likelihood of ref
 
         # compute log probs of correction

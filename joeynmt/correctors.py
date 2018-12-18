@@ -26,6 +26,7 @@ class RecurrentCorrector(Corrector):
                  bidirectional: bool = False,
                  decoder_size: int = 0,
                  activation: str = "tanh",
+                 freeze: bool = False,
                  **kwargs):
 
         super(RecurrentCorrector, self).__init__()
@@ -62,6 +63,10 @@ class RecurrentCorrector(Corrector):
         elif activation == "leakyrelu":
             self.activation = F.leaky_relu
 
+        if freeze:
+            for n, p in self.named_parameters():
+                print("Not training {}".format(n))
+                p.requires_grad = False
 
     def forward(self, y, y_length, mask, y_states):
         """
@@ -74,14 +79,14 @@ class RecurrentCorrector(Corrector):
         :param mask:
         :return:
         """
-        # TODO make use of length and mask!
+        # TODO make use of length and mask?
         # apply dropout ot the rnn input (embedded decoder predictions)
         x = self.rnn_input_dropout(y) # batch x time x embed
         # run through rnn (backwards)
         hidden = None
         rnn_outputs = []
         for t in range(x.shape[1]):
-            x_i = x[:,t,:].unsqueeze(1)
+            x_i = x[:, t, :].unsqueeze(1)
             rnn_output, hidden = self.rnn(x_i, hx=hidden)  # batch x 1 x hidden
             rnn_outputs.append(rnn_output.squeeze(1))
         rnn_outputs = torch.stack(rnn_outputs, dim=1)
