@@ -118,7 +118,7 @@ class Model(nn.Module):
             # input: attention vector of forwards RNN, hidden state of backwards RNN
             # R_corr: c_t = RNN([fw, bw, o_t-1], c_t-1), o_t = tanh(Linear(c_t))
             # loss: -log(P(r|NMT,o_t))
-            # TODO decoder predictions: what if beam search?
+            # TODO decoder predictions: what if beam search? (for training always greedy)
             greedy_pred = torch.argmax(outputs, dim=-1).cpu().numpy()  # batch x length
             #print("pred", greedy_pred.shape, greedy_pred)
             # print("flipped", np.flip(greedy_pred, axis=1))
@@ -282,16 +282,18 @@ class Model(nn.Module):
             max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
 
         # TODO add corrector!
+        # first pass decoding
         # greedy decoding
         if beam_size == 0:
-            stacked_output, stacked_attention_scores = greedy(
+            stacked_output, stacked_attention_scores, stacked_att_vectors = greedy(
                 encoder_hidden=encoder_hidden, encoder_output=encoder_output,
                 src_mask=batch.src_mask, embed=self.trg_embed,
                 bos_index=self.bos_index, decoder=self.decoder,
                 max_output_length=max_output_length)
             # batch, time, max_src_length
         else:  # beam size
-            stacked_output, stacked_attention_scores = \
+            # TODO track att vectors for BS
+            stacked_output, stacked_attention_scores, stacked_att_vectors = \
                 beam_search(size=beam_size, encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
                             src_mask=batch.src_mask, embed=self.trg_embed,
@@ -300,7 +302,63 @@ class Model(nn.Module):
                             pad_index=self.pad_index, bos_index=self.bos_index,
                             decoder=self.decoder)
 
-        return stacked_output, stacked_attention_scores
+
+        # corrector predicts perturbation of hidden state that needs correction
+        # input: attention vector of forwards RNN, hidden state of backwards RNN
+        # R_corr: c_t = RNN([fw, bw, o_t-1], c_t-1), o_t = tanh(Linear(c_t))
+        # loss: -log(P(r|NMT,o_t))
+        # TODO decoder predictions: what if beam search? (for training always greedy)
+       # greedy_pred = torch.argmax(stacked_output, dim=-1).cpu().numpy()  # batch x length
+        #print("pred", greedy_pred.shape, greedy_pred)
+        # print("flipped", np.flip(greedy_pred, axis=1))
+        # compute mask with numpy
+        eos = np.where(stacked_output == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
+        #print("np eos", eos)
+        # mark everything after first eos with 1, even if non-eos
+        eos_filled = np.where(np.cumsum(eos, axis=1)>=1, 1, 0)
+        # then create mask with 0s after first eos
+        mask = np.where(np.cumsum(eos_filled, axis=1)>1, 0, 1)
+        #print("np mask", mask)
+        rev_pred_mask = encoder_output.new_tensor(np.flip(mask, axis=1).copy(),
+                                           dtype=torch.uint8)
+        # reverse the prediction to read it in backwards
+        rev_predicted = encoder_output.new_tensor(
+            np.flip(stacked_output, axis=1).copy(), dtype=torch.long)  # flip in time (copy is needed for contiguity)
+
+        # TODO is mask even needed?
+        pred_length = rev_pred_mask.sum(1)
+
+        # predict corrections
+        corrections = self.correct(
+            y=rev_predicted, y_length=pred_length,
+            mask=rev_pred_mask, y_states=stacked_att_vectors.detach())
+
+        # run decoder again with corrections
+        if beam_size == 0:
+            corrected_stacked_output, corrected_stacked_attention_scores, _ = \
+                greedy(
+                        encoder_hidden=encoder_hidden,
+                        encoder_output=encoder_output,
+                        src_mask=batch.src_mask, embed=self.trg_embed,
+                        bos_index=self.bos_index, decoder=self.decoder,
+                        max_output_length=max_output_length,
+                        corrections=corrections)
+            # batch, time, max_src_length
+        else:  # beam size
+            # TODO track att vectors for BS and correct
+            corrected_stacked_output, corrected_stacked_attention_scores, _ = \
+                beam_search(size=beam_size, encoder_output=encoder_output,
+                            encoder_hidden=encoder_hidden,
+                            src_mask=batch.src_mask, embed=self.trg_embed,
+                            max_output_length=max_output_length,
+                            alpha=beam_alpha, eos_index=self.eos_index,
+                            pad_index=self.pad_index,
+                            bos_index=self.bos_index,
+                            decoder=self.decoder,
+                            corrections=corrections)
+
+        return stacked_output, stacked_attention_scores, \
+               corrected_stacked_output, corrected_stacked_attention_scores
 
     def __repr__(self):
         """

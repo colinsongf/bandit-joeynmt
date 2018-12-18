@@ -318,9 +318,12 @@ class TrainManager:
                 if self.steps % self.validation_freq == 0:
                     valid_start_time = time.time()
 
-                    valid_score, valid_loss, valid_ppl, valid_sources, \
-                    valid_sources_raw, valid_references, valid_hypotheses, \
-                    valid_hypotheses_raw, valid_attention_scores = \
+                    valid_score, corr_valid_score,\
+                    valid_loss, valid_ppl, valid_sources, \
+                    valid_sources_raw, valid_references, \
+                    valid_hypotheses, corr_valid_hypotheses, \
+                    valid_hypotheses_raw, corr_valid_hypotheses_raw,\
+                    valid_attention_scores, corr_valid_attention_scores = \
                         validate_on_data(
                         batch_size=self.batch_size, data=valid_data,
                         eval_metric=self.eval_metric,
@@ -329,6 +332,7 @@ class TrainManager:
                         max_output_length=self.max_output_length,
                         criterion=self.criterion)
 
+                    # TODO decide whether to write checkpoint: use corr?
                     if self.ckpt_metric == "loss":
                         ckpt_score = valid_loss
                     elif self.ckpt_metric in ["ppl", "perplexity"]:
@@ -359,7 +363,7 @@ class TrainManager:
                     if self.scheduler is not None:
                         if type(self.scheduler) is dict:
                             pass
-                            # TODO
+                            # TODO make scheduler step for both schedulers
                         else:
                             self.scheduler.step(schedule_score)
 
@@ -367,7 +371,7 @@ class TrainManager:
                     self._add_report(
                         valid_score=valid_score, valid_loss=valid_loss,
                         valid_ppl=valid_ppl, eval_metric=self.eval_metric,
-                        new_best=new_best)
+                        new_best=new_best, corr_valid_score=corr_valid_score)
 
                     # always print first x sentences
                     for p in range(self.print_valid_sents):
@@ -382,26 +386,54 @@ class TrainManager:
                             valid_hypotheses_raw[p]))
                         self.logger.debug("\tHypothesis: {}".format(
                             valid_hypotheses[p]))
+                        self.logger.debug("\tRaw hypothesis (CORR): {}".format(
+                            corr_valid_hypotheses_raw[p]))
+                        self.logger.debug("\tHypothesis (CORR): {}".format(
+                            corr_valid_hypotheses[p]))
                     valid_duration = time.time() - valid_start_time
                     total_valid_duration += valid_duration
                     self.logger.info(
-                        'Validation result at epoch {}, step {}: {}: {}, '
+                        'Validation result at epoch {}, step {}: {}: {},'
+                        ' corr {}: {}, '
                         'loss: {}, ppl: {}, duration: {:.4f}s'.format(
                             epoch_no+1, self.steps, self.eval_metric,
-                            valid_score, valid_loss, valid_ppl, valid_duration))
+                            valid_score, self.eval_metric, corr_valid_score,
+                            valid_loss, valid_ppl, valid_duration))
+
+                    # TODO report mean of corrections
+                    # TODO plot corrections over time
+                    # TODO make normalization of corr loss a flag
+                    # TODO adjust LR and saving
 
                     # store validation set outputs
-                    self.store_outputs(valid_hypotheses)
+                    current_valid_output_file = "{}/{}.hyps".format(
+                        self.model_dir,
+                        self.steps)
+                    corr_current_valid_output_file = "{}/{}.hyps.corr".format(
+                        self.model_dir,
+                        self.steps)
+                    self.store_outputs(
+                        valid_hypotheses, current_valid_output_file)
+                    self.store_outputs(
+                        corr_valid_hypotheses, corr_current_valid_output_file)
 
                     # store attention plots for first three sentences of
                     # valid data and one randomly chosen example
+                    random_examples = np.random.randint(
+                        0, len(valid_hypotheses))
                     store_attention_plots(attentions=valid_attention_scores,
                                           targets=valid_hypotheses_raw,
                                           sources=[s for s in valid_data.src],
-                                          idx=[0, 1, 2,
-                                               np.random.randint(0, len(
-                                                   valid_hypotheses))],
+                                          idx=[0, 1, 2]+random_examples,
                                           output_prefix="{}/att.{}".format(
+                                              self.model_dir,
+                                              self.steps))
+                    # store attention after correction
+                    store_attention_plots(attentions=corr_valid_attention_scores,
+                                          targets=corr_valid_hypotheses_raw,
+                                          sources=[s for s in valid_data.src],
+                                          idx=[0, 1, 2]+random_examples,
+                                          output_prefix="{}/corr.att.{}".format(
                                               self.model_dir,
                                               self.steps))
 
@@ -512,7 +544,7 @@ class TrainManager:
         return norm_batch_loss
 
     def _add_report(self, valid_score, valid_ppl, valid_loss, eval_metric,
-                    new_best=False):
+                    new_best=False, corr_valid_score=None):
         """
         Add a one-line report to validation logging file.
 
@@ -521,6 +553,7 @@ class TrainManager:
         :param valid_loss:
         :param eval_metric:
         :param new_best:
+        :param corr_valid_score:
         :return:
         """
         current_lr = -1
@@ -534,6 +567,7 @@ class TrainManager:
                 current_lr = param_group['lr']
 
         if type(current_lr) is dict:
+            # TODO adapt to corr
             # only stop if all learning rates have reached minimum
             self.stop = all(
                 [v < self.learning_rate_min for v in current_lr.values()])
@@ -542,21 +576,27 @@ class TrainManager:
                 self.stop = True
 
         with open(self.valid_report_file, 'a') as opened_file:
-            opened_file.write(
-                "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
-                "LR: {}\t{}\n".format(
-                    self.steps, valid_loss, valid_ppl, eval_metric,
-                    valid_score, current_lr, "*" if new_best else ""))
+            if corr_valid_score is None:
+                opened_file.write(
+                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
+                    "LR: {}\t{}\n".format(
+                        self.steps, valid_loss, valid_ppl, eval_metric,
+                        valid_score, current_lr, "*" if new_best else ""))
+            else:
+                opened_file.write(
+                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
+                    "Corr-{}: {:.5f}\tLR: {}\t{}\n".format(
+                        self.steps, valid_loss, valid_ppl, eval_metric,
+                        valid_score, eval_metric, corr_valid_score, current_lr,
+                        "*" if new_best else ""))
 
-    def store_outputs(self, hypotheses):
+    def store_outputs(self, hypotheses, output_file):
         """
         Write current validation outputs to file in model_dir.
         :param hypotheses:
         :return:
         """
-        current_valid_output_file = "{}/{}.hyps".format(self.model_dir,
-                                                        self.steps)
-        with open(current_valid_output_file, 'w') as opened_file:
+        with open(output_file, 'w') as opened_file:
             for hyp in hypotheses:
                 opened_file.write("{}\n".format(hyp))
 
@@ -616,8 +656,11 @@ def train(cfg_file):
             beam_size = 0
             beam_alpha = -1
 
-        score, loss, ppl, sources, sources_raw, references, hypotheses, \
-        hypotheses_raw, attention_scores  = validate_on_data(
+        score, corr_score, \
+        loss, ppl, sources, sources_raw, references, \
+        hypotheses, corr_hypotheses, \
+        hypotheses_raw, corr_hypotheses_raw, \
+        attention_scores, corr_attention_scores = validate_on_data(
             data=test_data, batch_size=trainer.batch_size,
             eval_metric=trainer.eval_metric, level=trainer.level,
             max_output_length=trainer.max_output_length,
@@ -631,18 +674,28 @@ def train(cfg_file):
             trainer.logger.info("{:4s}: {} {} [{}]".format(
                 "Test data result", score, trainer.eval_metric,
                 decoding_description))
+            trainer.logger.info("{:4s}: {} {} [{}]".format(
+                "Test data result after correction", corr_score,
+                trainer.eval_metric, decoding_description))
         else:
             trainer.logger.info(
                 "No references given for {}.{} -> no evaluation.".format(
                     cfg["data"]["test"],cfg["data"]["src"]))
 
         output_path_set = "{}/{}.{}".format(
-            trainer.model_dir,"test",cfg["data"]["trg"])
+            trainer.model_dir, "test",cfg["data"]["trg"])
+        corr_output_path_set = "{}/{}.{}.corr".format(
+            trainer.model_dir, "test", cfg["data"]["trg"])
         with open(output_path_set, mode="w", encoding="utf-8") as f:
             for h in hypotheses:
                 f.write(h + "\n")
+        with open(corr_output_path_set, mode="w", encoding="utf-8") as f:
+            for h in corr_hypotheses:
+                f.write(h + "\n")
         trainer.logger.info("Test translations saved to: {}".format(
             output_path_set))
+        trainer.logger.info("Test corrected translations saved to: {}".format(
+            corr_output_path_set))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser('Joey-NMT')

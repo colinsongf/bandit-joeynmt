@@ -7,7 +7,7 @@ from joeynmt.helpers import tile
 
 
 def greedy(src_mask, embed, bos_index, max_output_length, decoder,
-           encoder_output, encoder_hidden):
+           encoder_output, encoder_hidden, corrections=None):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
 
@@ -18,6 +18,7 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
     :param decoder:
     :param encoder_output:
     :param encoder_hidden:
+    :param corrections:
     :return:
     """
     batch_size = src_mask.size(0)
@@ -25,6 +26,7 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
                                dtype=torch.long)
     output = []
     attention_scores = []
+    attention_vectors = []
     hidden = None
     prev_att_vector = None
     for t in range(max_output_length):
@@ -36,7 +38,9 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
             trg_embed=embed(prev_y),
             hidden=hidden,
             prev_att_vector=prev_att_vector,
-            unrol_steps=1)
+            unrol_steps=1,
+            corrections=corrections
+        )
         # out: batch x time=1 x vocab (logits)
 
         # greedy decoding: choose arg max over vocabulary in each step
@@ -44,10 +48,12 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
         output.append(next_word.squeeze(1).cpu().numpy())
         prev_y = next_word
         attention_scores.append(att_probs.squeeze(1).cpu().numpy())
+        attention_vectors.append(prev_att_vector.squeeze(1))
         # batch, max_src_lengths
     stacked_output = np.stack(output, axis=1)  # batch, time
     stacked_attention_scores = np.stack(attention_scores, axis=1)
-    return stacked_output, stacked_attention_scores
+    attention_vectors = torch.stack(attention_vectors, dim=1)  # not numpy
+    return stacked_output, stacked_attention_scores, attention_vectors
 
 
 def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,

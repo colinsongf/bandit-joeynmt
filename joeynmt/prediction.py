@@ -38,7 +38,9 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
     # don't track gradients during validation
     with torch.no_grad():
         all_outputs = []
+        corr_all_outputs = []
         valid_attention_scores = []
+        corr_valid_attention_scores = []
         total_loss = 0
         total_ntokens = 0
         for valid_i, valid_batch in enumerate(iter(valid_iter), 1):
@@ -50,23 +52,31 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
             # TODO save computation: forward pass is computed twice
             # run as during training with teacher forcing
-            # TODO adapt!
             if criterion is not None and batch.trg is not None:
-                batch_loss = model.get_loss_for_batch(
+                batch_xent_loss = model.get_xent_loss_for_batch(
                     batch, criterion=criterion)
-                total_loss += batch_loss
+                corrector_loss = model.get_corr_loss_for_batch(
+                    batch=batch, criterion=criterion)
+
+                total_loss += batch_xent_loss+corrector_loss
                 total_ntokens += batch.ntokens
 
             # run as during inference to produce translations
-            output, attention_scores = model.run_batch(
-                batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
-                max_output_length=max_output_length)
+            # keep track of outputs before and after correction
+            output, attention_scores, corr_output, corr_attention_scores =\
+                model.run_batch(
+                    batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
+                    max_output_length=max_output_length)
 
             # sort outputs back to original order
+            corr_all_outputs.extend(corr_output[sort_reverse_index])
             all_outputs.extend(output[sort_reverse_index])
             valid_attention_scores.extend(
                 attention_scores[sort_reverse_index]
                 if attention_scores is not None else [])
+            corr_valid_attention_scores.extend(
+                corr_attention_scores[sort_reverse_index]
+                if corr_attention_scores is not None else [])
 
         assert len(all_outputs) == len(data)
 
@@ -83,12 +93,16 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         decoded_valid = arrays_to_sentences(arrays=all_outputs,
                                             vocabulary=model.trg_vocab,
                                             cut_at_eos=True)
+        corr_decoded_valid = arrays_to_sentences(arrays=corr_all_outputs,
+                                            vocabulary=model.trg_vocab,
+                                            cut_at_eos=True)
 
         # evaluate with metric on full dataset
         join_char = " " if level in ["word", "bpe"] else ""
         valid_sources = [join_char.join(s) for s in data.src]
         valid_references = [join_char.join(t) for t in data.trg]
         valid_hypotheses = [join_char.join(t) for t in decoded_valid]
+        corr_valid_hypotheses = [join_char.join(t) for t in corr_decoded_valid]
 
         # post-process
         if level == "bpe":
@@ -97,30 +111,45 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                                 for v in valid_references]
             valid_hypotheses = [bpe_postprocess(v) for
                                 v in valid_hypotheses]
+            corr_valid_hypotheses = [bpe_postprocess(v) for
+                                v in corr_valid_hypotheses]
 
         # if references are given, evaluate against them
         if len(valid_references) > 0:
             assert len(valid_hypotheses) == len(valid_references)
 
             current_valid_score = 0
+            corr_current_valid_score = 0
             if eval_metric.lower() == 'bleu':
                 # this version does not use any tokenization
                 current_valid_score = bleu(valid_hypotheses, valid_references)
+                corr_current_valid_score = bleu(corr_valid_hypotheses,
+                                                valid_references)
             elif eval_metric.lower() == 'chrf':
                 current_valid_score = chrf(valid_hypotheses, valid_references)
+                corr_current_valid_score = chrf(corr_valid_hypotheses,
+                                                valid_references)
             elif eval_metric.lower() == 'token_accuracy':
                 current_valid_score = token_accuracy(valid_hypotheses,
                                                valid_references, level=level)
+                corr_current_valid_score = token_accuracy(corr_valid_hypotheses,
+                                                     valid_references,
+                                                     level=level)
             elif eval_metric.lower() == 'sequence_accuracy':
                 current_valid_score = sequence_accuracy(valid_hypotheses,
                                                valid_references)
+                corr_current_valid_score = sequence_accuracy(
+                    corr_valid_hypotheses, valid_references)
         else:
             current_valid_score = -1
+            corr_current_valid_score = -1
 
-    return current_valid_score, valid_loss, valid_ppl, valid_sources, \
-           valid_sources_raw, valid_references, valid_hypotheses, \
-           decoded_valid, \
-           valid_attention_scores
+    return current_valid_score, corr_current_valid_score, \
+           valid_loss, valid_ppl, valid_sources, \
+           valid_sources_raw, valid_references, \
+           valid_hypotheses, corr_valid_hypotheses,\
+           decoded_valid, corr_decoded_valid, \
+           valid_attention_scores, corr_valid_attention_scores
 
 
 def test(cfg_file,
