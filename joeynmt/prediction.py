@@ -6,7 +6,7 @@ import numpy as np
 from joeynmt.constants import PAD_TOKEN
 from joeynmt.helpers import load_data, arrays_to_sentences, bpe_postprocess, \
     load_config, get_latest_checkpoint, make_data_iter, \
-    load_model_from_checkpoint, store_attention_plots
+    load_model_from_checkpoint, store_attention_plots, store_correction_plots
 from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
 from joeynmt.model import build_model
 from joeynmt.batch import Batch
@@ -173,7 +173,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 def test(cfg_file,
          ckpt: str = None,
          output_path: str = None,
-         save_attention: bool = False):
+         save_attention: bool = False,
+         save_correction: bool = False):
     """
     Main test function. Handles loading a model from checkpoint, generating
     translations and storing them and attention plots.
@@ -182,6 +183,7 @@ def test(cfg_file,
     :param ckpt:
     :param output_path:
     :param save_attention:
+    :param save_correction:
     :return:
     """
 
@@ -277,6 +279,15 @@ def test(cfg_file,
                                   sources=[s for s in data_set.src],
                                   idx=range(len(corr_hypotheses)),
                                   output_prefix=attention_path)
+
+        if corrections is not None and save_correction:
+            correction_path = "{}/{}.{}.corr".format(dir, data_set_name, step)
+            print("Correction plots saved to: {}.xx".format(correction_path))
+            store_correction_plots(corrections=corrections,
+                                  targets=hypotheses_raw,
+                                  corr_targets=hypotheses_raw,
+                                  idx=range(len(corr_hypotheses)),
+                                  output_prefix=correction_path)
 
         if output_path is not None:
             output_path_set = "{}.{}".format(output_path, data_set_name)
