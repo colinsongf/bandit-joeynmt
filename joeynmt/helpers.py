@@ -335,6 +335,38 @@ def store_attention_plots(attentions, targets, sources, output_prefix,
             continue
 
 
+def store_correction_plots(corrections, targets, corr_targets, output_prefix,
+                          idx):
+    """
+    Saves attention plots.
+
+    :param attentions:
+    :param targets:
+    :param corr_targets:
+    :param output_prefix:
+    :param idx:
+    :return:
+    """
+    # TODO add corrected targets to plot
+    vmax = np.max(corrections)
+    vmin = np.min(corrections)
+    for i in idx:
+        plot_file = "{}.{}.pdf".format(output_prefix, i)
+        corr_trg = corr_targets[i]
+        trg = targets[i]
+        correction_scores = corrections[i] # max_output_length x dec_hidden_size
+        try:
+            # matrices with unnormalized scores
+            plot_heatmap(scores=correction_scores, column_labels=trg,
+                         row_labels=None,
+                         output_path=plot_file,
+                         vmin=vmin, vmax=vmax)
+        except:
+            print("Couldn't plot example {}: trg len {}, corr trg len {}, "
+                  "corrections shape {}".format(i, len(trg), len(corr_trg),
+                                                     correction_scores.shape))
+            continue
+
 def get_latest_checkpoint(dir):
     """
     Returns the latest checkpoint (by time) from the given directory.

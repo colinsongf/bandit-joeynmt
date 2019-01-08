@@ -367,7 +367,8 @@ class Model(nn.Module):
             #print("Corrected stacked out", corrected_stacked_output)
 
         return stacked_output, stacked_attention_scores, \
-               corrected_stacked_output, corrected_stacked_attention_scores
+               corrected_stacked_output, corrected_stacked_attention_scores, \
+               corrections.cpu().numpy()
 
     def __repr__(self):
         """

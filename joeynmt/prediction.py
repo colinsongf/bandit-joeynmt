@@ -1,6 +1,7 @@
 # coding: utf-8
 
 import torch
+import numpy as np
 
 from joeynmt.constants import PAD_TOKEN
 from joeynmt.helpers import load_data, arrays_to_sentences, bpe_postprocess, \
@@ -41,6 +42,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         corr_all_outputs = []
         valid_attention_scores = []
         corr_valid_attention_scores = []
+        all_corrections = []
         total_loss = 0
         total_ntokens = 0
         for valid_i, valid_batch in enumerate(iter(valid_iter), 1):
@@ -63,10 +65,10 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
             # run as during inference to produce translations
             # keep track of outputs before and after correction
-            output, attention_scores, corr_output, corr_attention_scores =\
-                model.run_batch(
-                    batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
-                    max_output_length=max_output_length)
+            output, attention_scores, corr_output, corr_attention_scores, \
+                corrections = model.run_batch(
+                        batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
+                        max_output_length=max_output_length)
 
             # sort outputs back to original order
             corr_all_outputs.extend(corr_output[sort_reverse_index])
@@ -77,6 +79,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             corr_valid_attention_scores.extend(
                 corr_attention_scores[sort_reverse_index]
                 if corr_attention_scores is not None else [])
+            all_corrections.extend(corrections[sort_reverse_index]
+                                   if corrections is not None else [])
 
         assert len(all_outputs) == len(data)
 
@@ -163,8 +167,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
            valid_sources_raw, valid_references, \
            valid_hypotheses, corr_valid_hypotheses,\
            decoded_valid, corr_decoded_valid, \
-           valid_attention_scores, corr_valid_attention_scores
-
+           valid_attention_scores, corr_valid_attention_scores, \
+           np.array(all_corrections)
 
 def test(cfg_file,
          ckpt: str = None,
@@ -231,13 +235,14 @@ def test(cfg_file,
 
         score, sent_score, corr_score, sent_corr_score, \
         loss, ppl, sources, sources_raw, references, \
-        hypotheses, corr_hypotheses, \
-        hypotheses_raw, corr_hypotheses_raw, \
-        attention_scores, corr_attention_scores = validate_on_data(
-            model, data=data_set, batch_size=batch_size, level=level,
-            max_output_length=max_output_length, eval_metric=eval_metric,
-            use_cuda=use_cuda, criterion=None, beam_size=beam_size,
-            beam_alpha=beam_alpha)
+            hypotheses, corr_hypotheses, \
+            hypotheses_raw, corr_hypotheses_raw, \
+            attention_scores, corr_attention_scores, \
+            corrections = validate_on_data(
+                model, data=data_set, batch_size=batch_size, level=level,
+                max_output_length=max_output_length, eval_metric=eval_metric,
+                use_cuda=use_cuda, criterion=None, beam_size=beam_size,
+                beam_alpha=beam_alpha)
 
         if "trg" in data_set.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \

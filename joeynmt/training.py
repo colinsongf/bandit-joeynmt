@@ -15,7 +15,7 @@ from joeynmt.model import build_model
 from joeynmt.batch import Batch
 from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter, \
-    load_model_from_checkpoint
+    load_model_from_checkpoint, store_correction_plots
 from joeynmt.prediction import validate_on_data
 
 
@@ -321,13 +321,13 @@ class TrainManager:
                     valid_start_time = time.time()
 
                     valid_score, valid_sent_score,\
-                    corr_valid_score, corr_valid_sent_score, \
-                    valid_loss, valid_ppl, valid_sources, \
-                    valid_sources_raw, valid_references, \
-                    valid_hypotheses, corr_valid_hypotheses, \
-                    valid_hypotheses_raw, corr_valid_hypotheses_raw,\
-                    valid_attention_scores, corr_valid_attention_scores = \
-                        validate_on_data(
+                        corr_valid_score, corr_valid_sent_score, \
+                        valid_loss, valid_ppl, valid_sources, \
+                        valid_sources_raw, valid_references, \
+                        valid_hypotheses, corr_valid_hypotheses, \
+                        valid_hypotheses_raw, corr_valid_hypotheses_raw,\
+                        valid_attention_scores, corr_valid_attention_scores, \
+                        corrections = validate_on_data(
                             batch_size=self.batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
                             level=self.level, model=self.model,
@@ -409,11 +409,15 @@ class TrainManager:
                             corr_valid_score,
                             corr_valid_sent_score,
                             valid_loss, valid_ppl, valid_duration))
+                    corrections_means = corrections.mean()
+                    corrections_std = np.sqrt(
+                        np.mean((corrections - corrections_means) ** 2))
+                    self.logger.info("Correction moments: "
+                                     "mean={:.5f}, std={:.5f}.".format(
+                        corrections_means, corrections_std))
 
-                    # TODO report mean of corrections
                     # TODO plot corrections over time
-                    # TODO make normalization of corr loss a flag
-                    # TODO adjust LR and saving
+                    # TODO early stopping with corrector
 
                     # store validation set outputs
                     current_valid_output_file = "{}/{}.hyps".format(
@@ -446,6 +450,12 @@ class TrainManager:
                                           output_prefix="{}/corr.att.{}".format(
                                               self.model_dir,
                                               self.steps))
+                    store_correction_plots(
+                        corrections=corrections, targets=valid_hypotheses_raw,
+                        corr_targets=corr_valid_hypotheses_raw,
+                        idx=[0, 1, 2, random_example],
+                        output_prefix="{}/corr.{}".format(
+                            self.model_dir, self.steps))
 
                 if self.stop:
                     break
@@ -496,6 +506,7 @@ class TrainManager:
 
         if self.normalize_corrector:
             # use xent loss of decoder as factor to scale corrector loss
+            # TODO could also use subtraction, but no evidence that better yet
             norm_corrector_loss /= batch_loss.detach()
 
         # TODO add RL loss! gain in BLEU
@@ -675,7 +686,7 @@ def train(cfg_file):
         loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
-        attention_scores, corr_attention_scores = validate_on_data(
+        attention_scores, corr_attention_scores, corrections = validate_on_data(
             data=test_data, batch_size=trainer.batch_size,
             eval_metric=trainer.eval_metric, level=trainer.level,
             max_output_length=trainer.max_output_length,
