@@ -123,28 +123,42 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             if eval_metric.lower() == 'bleu':
                 # this version does not use any tokenization
                 current_valid_score = bleu(valid_hypotheses, valid_references)
+                current_sent_score = bleu(valid_hypotheses, valid_references,
+                                          corpus=False)
                 corr_current_valid_score = bleu(corr_valid_hypotheses,
                                                 valid_references)
+                corr_current_sent_score = bleu(corr_valid_hypotheses,
+                                               valid_references, corpus=False)
+
             elif eval_metric.lower() == 'chrf':
                 current_valid_score = chrf(valid_hypotheses, valid_references)
+                current_sent_score = chrf(valid_hypotheses, valid_references,
+                                          corpus=False)
                 corr_current_valid_score = chrf(corr_valid_hypotheses,
                                                 valid_references)
+                corr_current_sent_score = chrf(corr_valid_hypotheses,
+                                                valid_references, corpus=False)
             elif eval_metric.lower() == 'token_accuracy':
                 current_valid_score = token_accuracy(valid_hypotheses,
                                                valid_references, level=level)
+                current_sent_score = current_valid_score
                 corr_current_valid_score = token_accuracy(corr_valid_hypotheses,
                                                      valid_references,
                                                      level=level)
+                corr_current_sent_score = corr_current_valid_score
             elif eval_metric.lower() == 'sequence_accuracy':
                 current_valid_score = sequence_accuracy(valid_hypotheses,
                                                valid_references)
+                current_sent_score = current_valid_score
                 corr_current_valid_score = sequence_accuracy(
                     corr_valid_hypotheses, valid_references)
+                corr_current_sent_score = corr_current_valid_score
         else:
             current_valid_score = -1
             corr_current_valid_score = -1
 
-    return current_valid_score, corr_current_valid_score, \
+    return current_valid_score, current_sent_score, \
+           corr_current_valid_score, corr_current_sent_score, \
            valid_loss, valid_ppl, valid_sources, \
            valid_sources_raw, valid_references, \
            valid_hypotheses, corr_valid_hypotheses,\
@@ -215,7 +229,8 @@ def test(cfg_file,
 
     for data_set_name, data_set in data_to_predict.items():
 
-        score, corr_score, loss, ppl, sources, sources_raw, references, \
+        score, sent_score, corr_score, sent_corr_score, \
+        loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
         attention_scores, corr_attention_scores = validate_on_data(
@@ -228,8 +243,13 @@ def test(cfg_file,
             decoding_description = "Greedy decoding" if beam_size == 0 else \
                 "Beam search decoding with beam size = {} and alpha = {}".format(
                     beam_size, beam_alpha)
-            print("{:4s} {}: {} [{}]".format(
-                data_set_name, eval_metric, score, decoding_description))
+            print("{:4s} {}: {} (sent: {}) [{}]".format(
+                data_set_name, eval_metric, score, sent_score,
+                decoding_description))
+            decoding_description += "with corrections."
+            print("{:4s} {}: {} (sent: {}) [{}]".format(
+                data_set_name, eval_metric, corr_score, sent_corr_score,
+                decoding_description))
         else:
             print("No references given for {} -> no evaluation.".format(
                 data_set_name))
@@ -244,7 +264,8 @@ def test(cfg_file,
                                   output_prefix=attention_path)
 
         if corr_attention_scores is not None and save_attention:
-            attention_path = "{}/{}.{}.att.corr".format(dir, data_set_name, step)
+            attention_path = "{}/{}.{}.att.corr".format(dir, data_set_name,
+                                                        step)
             print("Attention plots saved to: {}.xx".format(attention_path))
             store_attention_plots(attentions=corr_attention_scores,
                                   targets=corr_hypotheses_raw,
@@ -258,8 +279,10 @@ def test(cfg_file,
                 for h in hypotheses:
                     f.write(h + "\n")
             print("Translations saved to: {}".format(output_path_set))
-            output_path_set_corr = "{}.{}.corr".format(output_path, data_set_name)
+            output_path_set_corr = "{}.{}.corr".format(output_path,
+                                                       data_set_name)
             with open(output_path_set_corr, mode="w", encoding="utf-8") as f:
                 for h in corr_hypotheses:
                     f.write(h + "\n")
-            print("Corrected translations saved to: {}".format(output_path_set_corr))
+            print("Corrected translations saved to: {}".format(
+                output_path_set_corr))

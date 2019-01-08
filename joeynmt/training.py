@@ -320,19 +320,20 @@ class TrainManager:
                 if self.steps % self.validation_freq == 0:
                     valid_start_time = time.time()
 
-                    valid_score, corr_valid_score,\
+                    valid_score, valid_sent_score,\
+                    corr_valid_score, corr_valid_sent_score, \
                     valid_loss, valid_ppl, valid_sources, \
                     valid_sources_raw, valid_references, \
                     valid_hypotheses, corr_valid_hypotheses, \
                     valid_hypotheses_raw, corr_valid_hypotheses_raw,\
                     valid_attention_scores, corr_valid_attention_scores = \
                         validate_on_data(
-                        batch_size=self.batch_size, data=valid_data,
-                        eval_metric=self.eval_metric,
-                        level=self.level, model=self.model,
-                        use_cuda=self.use_cuda,
-                        max_output_length=self.max_output_length,
-                        criterion=self.criterion)
+                            batch_size=self.batch_size, data=valid_data,
+                            eval_metric=self.eval_metric,
+                            level=self.level, model=self.model,
+                            use_cuda=self.use_cuda,
+                            max_output_length=self.max_output_length,
+                            criterion=self.criterion)
 
                     # TODO decide whether to write checkpoint: use corr?
                     if self.ckpt_metric == "loss":
@@ -364,16 +365,21 @@ class TrainManager:
                         schedule_score = valid_score
                     if self.scheduler is not None:
                         if type(self.scheduler) is dict:
-                            pass
-                            # TODO make scheduler step for both schedulers
+                            # corrector is scheduled after eval metric
+                            self.scheduler["corrector"].step(corr_valid_score)
+                            # make scheduler step for MT model
+                            self.scheduler["mt"].step(schedule_score)
                         else:
                             self.scheduler.step(schedule_score)
 
                     # append to validation report
                     self._add_report(
-                        valid_score=valid_score, valid_loss=valid_loss,
+                        valid_score=valid_score,
+                        valid_sent_score=valid_sent_score,
+                        valid_loss=valid_loss,
                         valid_ppl=valid_ppl, eval_metric=self.eval_metric,
-                        new_best=new_best, corr_valid_score=corr_valid_score)
+                        new_best=new_best, corr_valid_score=corr_valid_score,
+                        corr_valid_sent_score=corr_valid_sent_score)
 
                     # always print first x sentences
                     for p in range(self.print_valid_sents):
@@ -395,11 +401,13 @@ class TrainManager:
                     valid_duration = time.time() - valid_start_time
                     total_valid_duration += valid_duration
                     self.logger.info(
-                        'Validation result at epoch {}, step {}: {}: {},'
-                        ' corr {}: {}, '
-                        'loss: {}, ppl: {}, duration: {:.4f}s'.format(
+                        'Validation result at epoch {}, step {}: {}: {:.5f}'
+                        ' (sent: {:.5f}), corr {}: {:.5f} (sent: {:.5f}), '
+                        'loss: {:.5f}, ppl: {:.5f}, duration: {:.4f}s'.format(
                             epoch_no+1, self.steps, self.eval_metric,
-                            valid_score, self.eval_metric, corr_valid_score,
+                            valid_score, valid_sent_score, self.eval_metric,
+                            corr_valid_score,
+                            corr_valid_sent_score,
                             valid_loss, valid_ppl, valid_duration))
 
                     # TODO report mean of corrections
@@ -545,8 +553,10 @@ class TrainManager:
         self.total_tokens += batch.ntokens
         return norm_batch_loss
 
-    def _add_report(self, valid_score, valid_ppl, valid_loss, eval_metric,
-                    new_best=False, corr_valid_score=None):
+    def _add_report(self, valid_score, valid_sent_score,
+                    valid_ppl, valid_loss, eval_metric,
+                    new_best=False, corr_valid_score=None,
+                    corr_valid_sent_score=None):
         """
         Add a one-line report to validation logging file.
 
@@ -578,18 +588,21 @@ class TrainManager:
                 self.stop = True
 
         with open(self.valid_report_file, 'a') as opened_file:
-            if corr_valid_score is None:
+            if corr_valid_score is None and corr_valid_sent_score is None:
                 opened_file.write(
-                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
-                    "LR: {}\t{}\n".format(
+                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f} "
+                    "(sent: {:.5f})\t LR: {}\t{}\n".format(
                         self.steps, valid_loss, valid_ppl, eval_metric,
-                        valid_score, current_lr, "*" if new_best else ""))
+                        valid_score, valid_sent_score,
+                        current_lr, "*" if new_best else ""))
             else:
                 opened_file.write(
-                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
-                    "Corr-{}: {:.5f}\tLR: {}\t{}\n".format(
+                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f} "
+                    "(sent: {:.5f})\t Corr-{}: {:.5f} "
+                    "(sent: {:.5f})\tLR: {}\t{}\n".format(
                         self.steps, valid_loss, valid_ppl, eval_metric,
-                        valid_score, eval_metric, corr_valid_score, current_lr,
+                        valid_score, valid_sent_score, eval_metric,
+                        corr_valid_score, corr_valid_sent_score, current_lr,
                         "*" if new_best else ""))
 
     def store_outputs(self, hypotheses, output_file):
@@ -658,7 +671,7 @@ def train(cfg_file):
             beam_size = 0
             beam_alpha = -1
 
-        score, corr_score, \
+        score, sent_score, corr_score, sent_corr_score, \
         loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
@@ -673,12 +686,12 @@ def train(cfg_file):
             decoding_description = "Greedy decoding" if beam_size == 0 else \
                 "Beam search decoding with beam size = {} and alpha = {}"\
                     .format(beam_size, beam_alpha)
-            trainer.logger.info("{:4s}: {} {} [{}]".format(
-                "Test data result", score, trainer.eval_metric,
+            trainer.logger.info("{:4s}: {} (sent: {}) {} [{}]".format(
+                "Test data result", score, sent_score, trainer.eval_metric,
                 decoding_description))
-            trainer.logger.info("{:4s}: {} {} [{}]".format(
+            trainer.logger.info("{:4s}: {} (sent: {}) {} [{}]".format(
                 "Test data result after correction", corr_score,
-                trainer.eval_metric, decoding_description))
+                sent_corr_score, trainer.eval_metric, decoding_description))
         else:
             trainer.logger.info(
                 "No references given for {}.{} -> no evaluation.".format(
