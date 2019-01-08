@@ -215,8 +215,10 @@ def test(cfg_file,
 
     for data_set_name, data_set in data_to_predict.items():
 
-        score, loss, ppl, sources, sources_raw, references, hypotheses, \
-        hypotheses_raw, attention_scores = validate_on_data(
+        score, corr_score, loss, ppl, sources, sources_raw, references, \
+        hypotheses, corr_hypotheses, \
+        hypotheses_raw, corr_hypotheses_raw, \
+        attention_scores, corr_attention_scores = validate_on_data(
             model, data=data_set, batch_size=batch_size, level=level,
             max_output_length=max_output_length, eval_metric=eval_metric,
             use_cuda=use_cuda, criterion=None, beam_size=beam_size,
@@ -241,9 +243,23 @@ def test(cfg_file,
                                   idx=range(len(hypotheses)),
                                   output_prefix=attention_path)
 
+        if corr_attention_scores is not None and save_attention:
+            attention_path = "{}/{}.{}.att.corr".format(dir, data_set_name, step)
+            print("Attention plots saved to: {}.xx".format(attention_path))
+            store_attention_plots(attentions=corr_attention_scores,
+                                  targets=corr_hypotheses_raw,
+                                  sources=[s for s in data_set.src],
+                                  idx=range(len(corr_hypotheses)),
+                                  output_prefix=attention_path)
+
         if output_path is not None:
             output_path_set = "{}.{}".format(output_path, data_set_name)
             with open(output_path_set, mode="w", encoding="utf-8") as f:
                 for h in hypotheses:
                     f.write(h + "\n")
             print("Translations saved to: {}".format(output_path_set))
+            output_path_set_corr = "{}.{}.corr".format(output_path, data_set_name)
+            with open(output_path_set_corr, mode="w", encoding="utf-8") as f:
+                for h in corr_hypotheses:
+                    f.write(h + "\n")
+            print("Corrected translations saved to: {}".format(output_path_set_corr))

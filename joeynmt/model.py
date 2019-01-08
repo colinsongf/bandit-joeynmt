@@ -281,7 +281,6 @@ class Model(nn.Module):
         if max_output_length is None:
             max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
 
-        # TODO add corrector!
         # first pass decoding
         # greedy decoding
         if beam_size == 0:
@@ -292,7 +291,6 @@ class Model(nn.Module):
                 max_output_length=max_output_length)
             # batch, time, max_src_length
         else:  # beam size
-            # TODO track att vectors for BS
             stacked_output, stacked_attention_scores, stacked_att_vectors = \
                 beam_search(size=beam_size, encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
@@ -300,14 +298,19 @@ class Model(nn.Module):
                             max_output_length=max_output_length,
                             alpha=beam_alpha, eos_index=self.eos_index,
                             pad_index=self.pad_index, bos_index=self.bos_index,
-                            decoder=self.decoder)
-
+                            decoder=self.decoder,
+                            src_lengths=batch.src_lengths,
+                            return_attention=True,
+                            return_attention_vectors=True,
+                            corrections=None)
+         #   print("stacked att_vec", stacked_att_vectors.shape)
+         #   print("stacked_outpit", stacked_output.shape)
 
         # corrector predicts perturbation of hidden state that needs correction
         # input: attention vector of forwards RNN, hidden state of backwards RNN
         # R_corr: c_t = RNN([fw, bw, o_t-1], c_t-1), o_t = tanh(Linear(c_t))
         # loss: -log(P(r|NMT,o_t))
-        # TODO decoder predictions: what if beam search? (for training always greedy)
+        # TODO decoder predictions: for training always greedy
        # greedy_pred = torch.argmax(stacked_output, dim=-1).cpu().numpy()  # batch x length
         #print("pred", greedy_pred.shape, greedy_pred)
         # print("flipped", np.flip(greedy_pred, axis=1))
@@ -331,7 +334,10 @@ class Model(nn.Module):
         # predict corrections
         corrections = self.correct(
             y=rev_predicted, y_length=pred_length,
-            mask=rev_pred_mask, y_states=stacked_att_vectors.detach())
+            mask=rev_pred_mask,
+            y_states=torch.tensor(stacked_att_vectors,
+                                  device=rev_pred_mask.device,
+                                  dtype=torch.float32))
 
         # run decoder again with corrections
         if beam_size == 0:
@@ -345,7 +351,6 @@ class Model(nn.Module):
                         corrections=corrections)
             # batch, time, max_src_length
         else:  # beam size
-            # TODO track att vectors for BS and correct
             corrected_stacked_output, corrected_stacked_attention_scores, _ = \
                 beam_search(size=beam_size, encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
@@ -355,7 +360,11 @@ class Model(nn.Module):
                             pad_index=self.pad_index,
                             bos_index=self.bos_index,
                             decoder=self.decoder,
-                            corrections=corrections)
+                            corrections=corrections,
+                            src_lengths=batch.src_lengths,
+                            return_attention_vectors=False,
+                            return_attention=True)
+            #print("Corrected stacked out", corrected_stacked_output)
 
         return stacked_output, stacked_attention_scores, \
                corrected_stacked_output, corrected_stacked_attention_scores

@@ -290,6 +290,7 @@ class TrainManager:
         """
         train_iter = make_data_iter(train_data, batch_size=self.batch_size,
                                     train=True, shuffle=self.shuffle)
+        epoch_no = 0
         for epoch_no in range(self.epochs):
             self.logger.info("EPOCH {}".format(epoch_no + 1))
             self.model.train()
@@ -315,7 +316,7 @@ class TrainManager:
                     start = time.time()
                     total_valid_duration = 0
 
-                # validate on whole dev set
+                # validate on whole dev set (greedy decoding)
                 if self.steps % self.validation_freq == 0:
                     valid_start_time = time.time()
 
@@ -497,11 +498,6 @@ class TrainManager:
             # compute the gradient of the loss wrt to each of the params
             grad = torch.autograd.grad(corrector_loss,
                                        inputs=param, retain_graph=True)[0]
-            # gradient clipping
-            if self.clip_grad_fun is not None:
-                self.clip_grad_fun(params=param)
-
-            #print(grad) # output is a tuple
             grads[name] = grad
             assert grad.shape == param.shape
             param.grad = grad
@@ -509,20 +505,20 @@ class TrainManager:
         #print("grad norms for corr: ", [(k, torch.norm(v, 2)) for k, v in grads.items()])
 
         if not self.steps % self.logging_freq:
-            self.logger.debug("Gradient norms (before clipping): {}".format(
+            self.logger.debug("Gradient norms (w/o clipping): {}".format(
                               [(k, torch.norm(v.grad, 2)) for k, v
                                in self.model.named_parameters()
                                if v.grad is not None]).replace("),", "\n\t"))
 
         if self.clip_grad_fun is not None:
-            # clip gradients (in-place)
+            # clip gradients (in-place), corrector params included
             self.clip_grad_fun(params=self.model.parameters())
 
-        if not self.steps % self.logging_freq:
-            self.logger.debug("Gradient norms (after clipping): {}".format(
-                              [(k, torch.norm(v.grad, 2)) for k, v
-                               in self.model.named_parameters()
-                               if v.grad is not None]).replace("),", "\n\t"))
+            if not self.steps % self.logging_freq:
+                self.logger.debug("Gradient norms (after clipping): {}".format(
+                                  [(k, torch.norm(v.grad, 2)) for k, v
+                                   in self.model.named_parameters()
+                                   if v.grad is not None]).replace("),", "\n\t"))
 
         # make gradient step
         if type(self.optimizer) is dict:
