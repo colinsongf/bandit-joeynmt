@@ -153,13 +153,14 @@ class Model(nn.Module):
                 y=rev_predicted, y_length=pred_length,
                 mask=rev_pred_mask, y_states=att_vectors)
 
-            # run decoder again with corrections*rewards
+            # run decoder again with corrections*(1-rewards)
+            # if reward is 1 -> no correction
             corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors =\
                 self.decode(encoder_output=encoder_output,
                         encoder_hidden=encoder_hidden,
                         src_mask=src_mask, trg_input=trg_input,
                         unrol_steps=unrol_steps,
-                        corrections=corrections*rewards)
+                        corrections=corrections*(1-rewards))
             return greedy_pred, corrections, rewards, \
                    corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors
 
@@ -363,7 +364,7 @@ class Model(nn.Module):
                         src_mask=batch.src_mask, embed=self.trg_embed,
                         bos_index=self.bos_index, decoder=self.decoder,
                         max_output_length=max_output_length,
-                        corrections=corrections*rewards)
+                        corrections=corrections*(1-rewards))
             # batch, time, max_src_length
         else:  # beam size
             corrected_stacked_output, corrected_stacked_attention_scores, _ = \
@@ -375,7 +376,7 @@ class Model(nn.Module):
                             pad_index=self.pad_index,
                             bos_index=self.bos_index,
                             decoder=self.decoder,
-                            corrections=corrections*rewards,
+                            corrections=corrections*(1-rewards),
                             src_lengths=batch.src_lengths,
                             return_attention_vectors=False,
                             return_attention=True)

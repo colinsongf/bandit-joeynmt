@@ -144,7 +144,7 @@ class RecurrentCorrector(Corrector):
             corr_prev_pred = self.corr_activation(self.corr_output_layer(rnn_output))
             reward_prev_pred = self.reward_activation(self.reward_output_layer(rnn_output))
             # TODO could also feed correct reward as history
-            corr_prev_pred = corr_prev_pred*reward_prev_pred
+            corr_prev_pred = corr_prev_pred*(1-reward_prev_pred)
             corr_outputs.append(corr_prev_pred.squeeze(1))
             reward_outputs.append(reward_prev_pred.squeeze(1))
         corr_outputs = torch.stack(corr_outputs, dim=1)
