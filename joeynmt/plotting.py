@@ -10,8 +10,66 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 
-def plot_heatmap(scores=None, column_labels=None, row_labels=None,
-                 output_path="plot.png", vmin=0., vmax=1.):
+def plot_correction(correction, reward, trg, corr_trg,
+                    output_path):
+
+    # only plot as many corrections as trg or corr_trg are long
+    max_len = max(len(trg), len(corr_trg))
+    abs_mean_corr = np.mean(np.abs(correction[:max_len]), axis=1, keepdims=True)
+    while len(trg) < max_len:
+        trg.append("#")
+
+    labelsize = 25 * (10 / max(1, max_len))
+
+    # font config
+    rcParams['xtick.labelsize'] = labelsize
+    rcParams['ytick.labelsize'] = labelsize
+
+    fig = plt.figure(dpi=300)
+
+    ax1 = plt.subplot(211)
+    ax1.imshow(abs_mean_corr.T, cmap='viridis', origin='upper')
+    ax1.set_ylabel("Correction")
+    ax1.set(xlabel='Trg', ylabel='Correction')
+
+    ax1.set_xticklabels(trg, minor=False, rotation="vertical")
+    ax1.xaxis.tick_top()
+    ax1.set_yticklabels([])
+    ax1.set_xticks(np.arange(len(trg)) + 0, minor=False)
+
+    #ax1.get_yaxis().set_visible(False)
+    ax1.get_xaxis().set_visible(False)
+
+    ax2 = plt.subplot(212, sharex=ax1)
+    ax2.imshow(reward[:max_len].T, vmin=0, vmax=1, cmap='viridis',
+                             origin='upper')
+    #ax2.set_ylabel("Reward")
+    ax2.set(xlabel='Trg', ylabel='Reward')
+    #ax2.get_yaxis().set_visible(False)
+    ax2.set_yticklabels([])
+    ax2.set_xticklabels(trg, minor=False, rotation="vertical")
+
+    # TODO add corr
+    #plt.figtext(0.5, 0.01, " ".join(corr_trg),
+    #            wrap=True, horizontalalignment='center',
+    #            fontsize=labelsize)
+
+    plt.tight_layout()
+
+    if output_path.endswith(".pdf"):
+        pp = PdfPages(output_path)
+        pp.savefig(fig)
+        pp.close()
+    else:
+        if not output_path.endswith(".png"):
+            output_path += ".png"
+        plt.savefig(output_path)
+
+    plt.close()
+
+
+def plot_attention(scores=None, column_labels=None, row_labels=None,
+                   output_path="plot.png", vmin=0., vmax=1.):
     """
     Plotting function that can be used to visualize (self-)attention.
     Plots are saved if `output_path` is specified, in format that this file
@@ -38,8 +96,8 @@ def plot_heatmap(scores=None, column_labels=None, row_labels=None,
     #assert np.sum(scores[y_sent_len:, :x_sent_len]) == 0
 
     # automatic label size
-    x_labelsize = 25 * (10 / min(10, x_sent_len))  #max(x_sent_len, y_sent_len))
-    y_labelsize = 25 * (10 / max(10, y_sent_len))  #max(x_sent_len, y_sent_len))
+    x_labelsize = 25 * (10 / max(x_sent_len, y_sent_len))
+    y_labelsize = 25 * (10 / max(x_sent_len, y_sent_len))
 
 
     # font config

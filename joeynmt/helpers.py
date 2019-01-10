@@ -17,7 +17,7 @@ from torchtext import data
 from joeynmt.constants import UNK_TOKEN, DEFAULT_UNK_ID, \
     EOS_TOKEN, BOS_TOKEN, PAD_TOKEN
 from joeynmt.vocabulary import Vocabulary
-from joeynmt.plotting import plot_heatmap
+from joeynmt.plotting import plot_attention, plot_correction
 
 
 def log_cfg(cfg, logger, prefix="cfg"):
@@ -326,8 +326,8 @@ def store_attention_plots(attentions, targets, sources, output_prefix,
         trg = targets[i]
         attention_scores = attentions[i].T
         try:
-            plot_heatmap(scores=attention_scores, column_labels=trg,
-                        row_labels=src, output_path=plot_file)
+            plot_attention(scores=attention_scores, column_labels=trg,
+                           row_labels=src, output_path=plot_file)
         except:
             print("Couldn't plot example {}: src len {}, trg len {}, "
                   "attention scores shape {}".format(i, len(src), len(trg),
@@ -335,32 +335,30 @@ def store_attention_plots(attentions, targets, sources, output_prefix,
             continue
 
 
-def store_correction_plots(corrections, targets, corr_targets, output_prefix,
-                          idx):
+def store_correction_plots(corrections, rewards,
+                           targets, corr_targets, output_prefix, idx):
     """
     Saves attention plots.
 
-    :param attentions:
+    :param corrections:
+    :param rewards:
     :param targets:
     :param corr_targets:
     :param output_prefix:
     :param idx:
     :return:
     """
-    # TODO add corrected targets to plot
-    vmax = np.max(corrections)
-    vmin = np.min(corrections)
     for i in idx:
         plot_file = "{}.{}.pdf".format(output_prefix, i)
         corr_trg = corr_targets[i]
         trg = targets[i]
         correction_scores = corrections[i] # max_output_length x dec_hidden_size
+        reward = rewards[i]
         try:
             # matrices with unnormalized scores
-            plot_heatmap(scores=correction_scores, column_labels=trg,
-                         row_labels=None,
-                         output_path=plot_file,
-                         vmin=vmin, vmax=vmax)
+            plot_correction(correction=correction_scores, reward=reward,
+                            trg=trg, corr_trg=corr_trg,
+                            output_path=plot_file)
         except:
             print("Couldn't plot example {}: trg len {}, corr trg len {}, "
                   "corrections shape {}".format(i, len(trg), len(corr_trg),

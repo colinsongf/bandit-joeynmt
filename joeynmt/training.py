@@ -508,8 +508,10 @@ class TrainManager:
                                           output_prefix="{}/corr.att.{}".format(
                                               self.model_dir,
                                               self.steps))
+
                     store_correction_plots(
-                        corrections=corrections, targets=valid_hypotheses_raw,
+                        corrections=corrections, rewards=rewards,
+                        targets=valid_hypotheses_raw,
                         corr_targets=corr_valid_hypotheses_raw,
                         idx=[0, 1, 2, random_example],
                         output_prefix="{}/corr.{}".format(
