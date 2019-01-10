@@ -41,10 +41,10 @@ def plot_correction(correction, reward, trg, corr_trg,
     ax1.get_xaxis().set_visible(False)
 
     ax2 = plt.subplot(212, sharex=ax1)
-    ax2.imshow(reward[:max_len].T, vmin=0, vmax=1, cmap='viridis',
+    ax2.imshow(1-reward[:max_len].T, vmin=0, vmax=1, cmap='viridis',
                              origin='upper')
     #ax2.set_ylabel("Reward")
-    ax2.set(xlabel='Trg', ylabel='Reward')
+    ax2.set(xlabel='Trg', ylabel='1-Reward')
     #ax2.get_yaxis().set_visible(False)
     ax2.set_yticklabels([])
     ax2.set_xticklabels(trg, minor=False, rotation="vertical")
