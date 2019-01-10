@@ -43,6 +43,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         valid_attention_scores = []
         corr_valid_attention_scores = []
         all_corrections = []
+        all_rewards = []
         total_loss = 0
         total_ntokens = 0
         for valid_i, valid_batch in enumerate(iter(valid_iter), 1):
@@ -66,7 +67,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # run as during inference to produce translations
             # keep track of outputs before and after correction
             output, attention_scores, corr_output, corr_attention_scores, \
-                corrections = model.run_batch(
+                corrections, rewards = model.run_batch(
                         batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
                         max_output_length=max_output_length)
 
@@ -81,6 +82,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                 if corr_attention_scores is not None else [])
             all_corrections.extend(corrections[sort_reverse_index]
                                    if corrections is not None else [])
+            all_rewards.extend(rewards[sort_reverse_index]
+                               if corrections is not None else [])
 
         assert len(all_outputs) == len(data)
 
@@ -92,6 +95,9 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         else:
             valid_loss = -1
             valid_ppl = -1
+
+        # gold rewards
+        # TODO
 
         # decode back to symbols
         decoded_valid = arrays_to_sentences(arrays=all_outputs,
@@ -168,7 +174,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
            valid_hypotheses, corr_valid_hypotheses,\
            decoded_valid, corr_decoded_valid, \
            valid_attention_scores, corr_valid_attention_scores, \
-           np.array(all_corrections)
+           np.array(all_corrections), np.array(all_rewards)
+
 
 def test(cfg_file,
          ckpt: str = None,
@@ -240,7 +247,7 @@ def test(cfg_file,
             hypotheses, corr_hypotheses, \
             hypotheses_raw, corr_hypotheses_raw, \
             attention_scores, corr_attention_scores, \
-            corrections = validate_on_data(
+            corrections, rewards = validate_on_data(
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
                 use_cuda=use_cuda, criterion=None, beam_size=beam_size,

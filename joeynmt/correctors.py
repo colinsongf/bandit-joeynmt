@@ -25,8 +25,12 @@ class RecurrentCorrector(Corrector):
                  bridge: bool = False,
                  bidirectional: bool = False,
                  decoder_size: int = 0,
-                 activation: str = "tanh",
+                 corr_activation: str = "tanh",
+                 reward_activation: str = "sigmoid",
                  freeze: bool = False,
+                 attention: str = "bahdanau",
+                 encoder: Encoder = None,
+                 reward_coeff: float = 0,
                  **kwargs):
 
         super(RecurrentCorrector, self).__init__()
@@ -38,6 +42,7 @@ class RecurrentCorrector(Corrector):
         self.bridge = bridge
         self.type = type
         self.output_size = decoder_size
+        self.reward_coeff = reward_coeff
 
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
@@ -54,14 +59,39 @@ class RecurrentCorrector(Corrector):
         self.output_rnn = rnn(decoder_size+hidden_size+decoder_size,
                               hidden_size, num_layers=1, batch_first=True)
 
-        self.output_layer = nn.Linear(hidden_size, decoder_size)
+        self.corr_output_layer = nn.Linear(hidden_size, decoder_size)
 
-        if activation == "tanh":
-            self.activation = torch.tanh
-        elif activation == "relu":
-            self.activation = F.relu
-        elif activation == "leakyrelu":
-            self.activation = F.leaky_relu
+        # predict a reward
+        # TODO binary?
+        self.reward_output_layer = nn.Linear(hidden_size, 1)
+
+        if corr_activation == "tanh":
+            self.corr_activation = torch.tanh
+        elif corr_activation == "relu":
+            self.corr_activation = F.relu
+        elif corr_activation == "leakyrelu":
+            self.corr_activation = F.leaky_relu
+
+        if reward_activation == "tanh":
+            self.reward_activation = torch.tanh
+        elif reward_activation == "relu":
+            self.reward_activation = F.relu
+        elif reward_activation == "leakyrelu":
+            self.reward_activation = F.leaky_relu
+        elif reward_activation == "sigmoid":
+            self.reward_activation = torch.sigmoid
+        print(self.reward_activation)
+
+        # TODO integrate src attention
+        #if attention == "bahdanau":
+        #    self.attention = BahdanauAttention(hidden_size=hidden_size,
+        #                                       key_size=encoder.output_size,
+        #                                       query_size=hidden_size)
+        #elif attention == "luong":
+        #    self.attention = LuongAttention(hidden_size=hidden_size,
+        #                                    key_size=encoder.output_size)
+        #else:
+        #    raise ValueError("Unknown attention mechanism: %s" % attention)
 
         if freeze:
             for n, p in self.named_parameters():
@@ -97,23 +127,29 @@ class RecurrentCorrector(Corrector):
 
         # now make a prediction for every time step with rnn
         hidden = None
-        outputs = []
+        corr_outputs = []
+        reward_outputs = []
         with torch.no_grad():
-            prev_pred = comb_states.new_zeros(comb_states.shape[0], 1,
+            corr_prev_pred = comb_states.new_zeros(comb_states.shape[0], 1,
                                               self.output_size)
-            #print(prev_pred.shape)
+            #print(corr_prev_pred.shape)
         for t in range(x.shape[1]):
             comb_i = comb_states[:, t, :].unsqueeze(1)
             #print(comb_i.shape)
             # feed in both previous prediction and combination of states
-            input_i = torch.cat([comb_i, prev_pred], dim=2)
+            input_i = torch.cat([comb_i, corr_prev_pred], dim=2)
             #print("inpi", input_i.shape)
             # TODO might add layers here to make rnn smaller
             rnn_output, hidden = self.output_rnn(input_i, hx=hidden)
-            prev_pred = self.activation(self.output_layer(rnn_output))
-            outputs.append(prev_pred.squeeze(1))
-        outputs = torch.stack(outputs, dim=1)
-        #print("outputs", outputs.shape)
+            corr_prev_pred = self.corr_activation(self.corr_output_layer(rnn_output))
+            reward_prev_pred = self.reward_activation(self.reward_output_layer(rnn_output))
+            # TODO could also feed correct reward as history
+            corr_prev_pred = corr_prev_pred*reward_prev_pred
+            corr_outputs.append(corr_prev_pred.squeeze(1))
+            reward_outputs.append(reward_prev_pred.squeeze(1))
+        corr_outputs = torch.stack(corr_outputs, dim=1)
+        reward_outputs = torch.stack(reward_outputs, dim=1)
+        #print("corr_outputs", corr_outputs.shape)
 
         # read in the translation backwards
         # bidirectional only works if sorted!
@@ -148,7 +184,7 @@ class RecurrentCorrector(Corrector):
         # make RNN as well: previous correction should influence future correction!
         #output = self.activation(self.output_layer(comb_states))
 
-        return outputs
+        return corr_outputs, reward_outputs
 
 
 

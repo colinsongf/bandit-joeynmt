@@ -17,6 +17,7 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter, \
     load_model_from_checkpoint, store_correction_plots
 from joeynmt.prediction import validate_on_data
+from joeynmt.metrics import token_accuracy, bleu
 
 
 class TrainManager:
@@ -327,13 +328,15 @@ class TrainManager:
                         valid_hypotheses, corr_valid_hypotheses, \
                         valid_hypotheses_raw, corr_valid_hypotheses_raw,\
                         valid_attention_scores, corr_valid_attention_scores, \
-                        corrections = validate_on_data(
+                        corrections, rewards = validate_on_data(
                             batch_size=self.batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
                             criterion=self.criterion)
+
+                    # TODO evaluation of reward prediction
 
                     # TODO decide whether to write checkpoint: use corr?
                     if self.ckpt_metric == "loss":
@@ -398,6 +401,9 @@ class TrainManager:
                             corr_valid_hypotheses_raw[p]))
                         self.logger.debug("\tHypothesis (CORR): {}".format(
                             corr_valid_hypotheses[p]))
+                        self.logger.debug("\tRewards: {}".format(
+                            [(t, r[0]) for t, r in
+                             zip(valid_hypotheses_raw[p], rewards[p])]))
                     valid_duration = time.time() - valid_start_time
                     total_valid_duration += valid_duration
                     self.logger.info(
@@ -415,8 +421,60 @@ class TrainManager:
                     self.logger.info("Correction moments: "
                                      "mean={:.5f}, std={:.5f}.".format(
                         corrections_means, corrections_std))
+                    rewards_means = rewards.mean()
+                    rewards_std = np.sqrt(
+                        np.mean((rewards - rewards_means) ** 2))
+                    self.logger.info("Reward moments: "
+                                     "mean={:.5f}, std={:.5f}.".format(
+                        rewards_means, rewards_std))
 
-                    # TODO plot corrections over time
+                    # measure correlation between reward and corr mean
+                    # corrections: valid_size x time x hidden
+                    # rewards: valid_size x time x 1
+                    self.logger.info(
+                        "Pearson correl: abs(corr) & rewards: {}".format(
+                            np.corrcoef(
+                                np.abs(corrections).mean(2).flatten(),
+                                rewards.flatten())[0, 1]))
+                     # mean per position
+
+                    # find examples where corr improved (token acc or sbleu)
+                    max_examples = self.print_valid_sents
+                    print_pos_examples = 0
+                    print_neg_examples = 0
+                    for hyp, corr, ref in zip(valid_hypotheses,
+                                              corr_valid_hypotheses,
+                                              valid_references):
+                        if print_pos_examples >= max_examples \
+                                and print_neg_examples >= max_examples:
+                            break
+
+                        corr_acc = token_accuracy([corr], [ref],
+                                                  level=self.level)
+                        corr_sbleu = bleu([corr], [ref])
+                        hyp_acc = token_accuracy([hyp], [ref],
+                                                 level=self.level)
+                        hyp_sbleu = bleu([hyp], [ref])
+                        if corr_sbleu > hyp_sbleu:
+                            if print_pos_examples >= max_examples:
+                                continue
+                            print_pos_examples += 1
+                            effect = "improved"
+                        elif corr_sbleu < hyp_sbleu:
+                            if print_neg_examples >= max_examples:
+                                continue
+                            print_neg_examples += 1
+                            effect = "worsened"
+                        else:
+                            continue
+
+                        self.logger.debug("Corrector {}: "
+                                         "\n\tHYP {} ({:.2f})"
+                                         "\n\tCORR {} ({:.2f})"
+                                         "\n\tREF {}".format(
+                            effect, hyp, hyp_sbleu, corr, corr_sbleu, ref))
+
+
                     # TODO early stopping with corrector
 
                     # store validation set outputs
@@ -686,12 +744,13 @@ def train(cfg_file):
         loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
-        attention_scores, corr_attention_scores, corrections = validate_on_data(
-            data=test_data, batch_size=trainer.batch_size,
-            eval_metric=trainer.eval_metric, level=trainer.level,
-            max_output_length=trainer.max_output_length,
-            model=model, use_cuda=trainer.use_cuda, criterion=None,
-            beam_size=beam_size, beam_alpha=beam_alpha)
+        attention_scores, corr_attention_scores, corrections, rewards =\
+            validate_on_data(
+                data=test_data, batch_size=trainer.batch_size,
+                eval_metric=trainer.eval_metric, level=trainer.level,
+                max_output_length=trainer.max_output_length,
+                model=model, use_cuda=trainer.use_cuda, criterion=None,
+                beam_size=beam_size, beam_alpha=beam_alpha)
         
         if "trg" in test_data.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \
