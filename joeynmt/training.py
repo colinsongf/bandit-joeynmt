@@ -18,7 +18,7 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter, \
     load_model_from_checkpoint, store_correction_plots
 from joeynmt.prediction import validate_on_data
-from joeynmt.metrics import token_accuracy, bleu
+from joeynmt.metrics import token_accuracy, bleu, f1_bin
 
 
 class TrainManager:
@@ -424,17 +424,29 @@ class TrainManager:
 
                     reward_corr = np.corrcoef(reward_targets_flat.astype(float),
                                               rewards_flat)[0, 1]
+                    # transform rewards into binary labels with 0.5 as threshold
+                    # then compute accuracy
+                    bin_rewards_flat = np.greater_equal(rewards_flat, 0.5).astype(int)
+                    bin_reward_acc = np.equal(bin_rewards_flat,
+                                              reward_targets_flat)\
+                                         .sum()/reward_targets_flat.size
+
+                    # compute f1 for both classes
+                    f1_1, f1_0 = f1_bin(bin_rewards_flat, reward_targets_flat)
+                    f1_prod = f1_1*f1_0
 
                     self.logger.info(
                         'Validation result at epoch {}, step {}: {}: {:.5f}'
                         ' (sent: {:.5f}), corr {}: {:.5f} (sent: {:.5f}),'
-                        ' reward MSE: {:.5f}, correl.: {:.5f}, '
-                        'loss: {:.5f}, ppl: {:.5f}, duration: {:.4f}s'.format(
+                        ' reward MSE: {:.5f}, correl.: {:.2f}, acc.: {:.2f},'
+                        ' f1(1): {:.2f}, f1(0): {:.2f}, f1_prod: {:.2f}'
+                        ' loss: {:.5f}, ppl: {:.5f}, duration: {:.4f}s'.format(
                             epoch_no+1, self.steps, self.eval_metric,
                             valid_score, valid_sent_score, self.eval_metric,
                             corr_valid_score,
                             corr_valid_sent_score,
-                            reward_mse, reward_corr,
+                            reward_mse, reward_corr, bin_reward_acc*100,
+                            f1_1*100, f1_0*100, f1_prod*100,
                             valid_loss, valid_ppl, valid_duration))
 
                     # TODO check if this moment computation is correct
