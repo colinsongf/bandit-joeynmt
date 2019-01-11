@@ -374,15 +374,6 @@ class TrainManager:
                         else:
                             self.scheduler.step(schedule_score)
 
-                    # append to validation report
-                    self._add_report(
-                        valid_score=valid_score,
-                        valid_sent_score=valid_sent_score,
-                        valid_loss=valid_loss,
-                        valid_ppl=valid_ppl, eval_metric=self.eval_metric,
-                        new_best=new_best, corr_valid_score=corr_valid_score,
-                        corr_valid_sent_score=corr_valid_sent_score)
-
                     # always print first x sentences
                     for p in range(self.print_valid_sents):
                         self.logger.debug("Example #{}".format(p))
@@ -506,6 +497,18 @@ class TrainManager:
                                          "\n\tREF {}".format(
                             effect, hyp, hyp_sbleu, corr, corr_sbleu, ref))
 
+                    # append to validation report
+                    self._add_report(
+                        valid_score=valid_score,
+                        valid_sent_score=valid_sent_score,
+                        valid_loss=valid_loss,
+                        valid_ppl=valid_ppl, eval_metric=self.eval_metric,
+                        new_best=new_best,
+                        corr_valid_score=corr_valid_score,
+                        corr_valid_sent_score=corr_valid_sent_score,
+                        reward_f1_1=f1_1*100, reward_f1_0=f1_0*100,
+                        reward_f1_prod=f1_prod*100, reward_corr=reward_corr,
+                        reward_mse=reward_mse, reward_acc=bin_reward_acc*100)
 
                     # TODO early stopping with corrector
 
@@ -659,7 +662,10 @@ class TrainManager:
     def _add_report(self, valid_score, valid_sent_score,
                     valid_ppl, valid_loss, eval_metric,
                     new_best=False, corr_valid_score=None,
-                    corr_valid_sent_score=None):
+                    corr_valid_sent_score=None,
+                    reward_f1_1=None, reward_f1_0=None,
+                    reward_f1_prod=None, reward_corr=None,
+                    reward_mse=None, reward_acc=None):
         """
         Add a one-line report to validation logging file.
 
@@ -690,23 +696,38 @@ class TrainManager:
             if current_lr < self.learning_rate_min:
                 self.stop = True
 
+        report_str = "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\tMT-{}: {:.5f}\t" \
+                     "MT-sBLEU: {:.5f})".format(
+                            self.steps, valid_loss, valid_ppl, eval_metric,
+                            valid_score, valid_sent_score)
+
+        if corr_valid_score is not None and corr_valid_sent_score is not None:
+            report_str += "\tCorr-{}: {:.5f}\tCorr-sBLEU: {:.5f}".format(
+                eval_metric, corr_valid_score, corr_valid_sent_score)
+
+        if reward_mse is not None:
+            report_str += "\tReward_MSE: {:.5f}".format(reward_mse)
+
+        if reward_corr is not None:
+            report_str += "\tReward_Corr: {:.2f}".format(reward_corr)
+
+        if reward_acc is not None:
+            report_str += "\tReward_Acc: {:.2f}".format(reward_acc)
+
+        if reward_f1_prod is not None \
+            and reward_f1_0 is not None \
+                and reward_f1_1 is not None:
+            report_str += "\tF1_1: {:.2f}" \
+                          "\tF1_0: {:.2f} " \
+                          "\tF1_prod: {:.2f}".format(
+                                reward_f1_1, reward_f1_0, reward_f1_prod)
+
+        # at the end add * and lr
+        report_str += "\t LR: {}\t{}\n".format(current_lr,
+                                               "*" if new_best else "")
+
         with open(self.valid_report_file, 'a') as opened_file:
-            if corr_valid_score is None and corr_valid_sent_score is None:
-                opened_file.write(
-                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f} "
-                    "(sent: {:.5f})\t LR: {}\t{}\n".format(
-                        self.steps, valid_loss, valid_ppl, eval_metric,
-                        valid_score, valid_sent_score,
-                        current_lr, "*" if new_best else ""))
-            else:
-                opened_file.write(
-                    "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f} "
-                    "(sent: {:.5f})\t Corr-{}: {:.5f} "
-                    "(sent: {:.5f})\tLR: {}\t{}\n".format(
-                        self.steps, valid_loss, valid_ppl, eval_metric,
-                        valid_score, valid_sent_score, eval_metric,
-                        corr_valid_score, corr_valid_sent_score, current_lr,
-                        "*" if new_best else ""))
+            opened_file.write(report_str)
 
     def store_outputs(self, hypotheses, output_file):
         """
