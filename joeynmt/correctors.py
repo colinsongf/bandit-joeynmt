@@ -80,7 +80,6 @@ class RecurrentCorrector(Corrector):
             self.reward_activation = F.leaky_relu
         elif reward_activation == "sigmoid":
             self.reward_activation = torch.sigmoid
-        print(self.reward_activation)
 
         # TODO integrate src attention
         #if attention == "bahdanau":
@@ -98,20 +97,14 @@ class RecurrentCorrector(Corrector):
                 print("Not training {}".format(n))
                 p.requires_grad = False
 
-    def forward(self, y, y_length, mask, y_states):
+    def _apply_rnn(self, input):
         """
-        Reads the decoder output backwards,
-        combines it with decoder hidden states
-        and predicts edits to hidden states.
-
-        :param y: embedded, reversed decoder predictions
-        :param y_length:
-        :param mask:
-        :return:
+        RNN to read a sequence of embedded symbols (input is reversed)
+        :param input:
+        :return: hidden states, batch x input.shape(1) x rnn_size
         """
-        # TODO make use of length and mask?
         # apply dropout ot the rnn input (embedded decoder predictions)
-        x = self.rnn_input_dropout(y) # batch x time x embed
+        x = self.rnn_input_dropout(input)  # batch x time x embed
         # run through rnn (backwards)
         hidden = None
         rnn_outputs = []
@@ -120,6 +113,21 @@ class RecurrentCorrector(Corrector):
             rnn_output, hidden = self.rnn(x_i, hx=hidden)  # batch x 1 x hidden
             rnn_outputs.append(rnn_output.squeeze(1))
         rnn_outputs = torch.stack(rnn_outputs, dim=1)
+        return rnn_outputs
+
+    def forward(self, reversed_input, y_length, mask, y_states):
+        """
+        Reads the decoder output backwards,
+        combines it with decoder hidden states
+        and predicts edits to hidden states.
+
+        :param reversed_input: embedded, reversed decoder predictions
+        :param y_length:
+        :param mask:
+        :return:
+        """
+        # TODO make use of length and mask?
+        rnn_outputs = self._apply_rnn(input=reversed_input)
         #print("bw rnn output", rnn_outputs.shape)  # batch x time x hidden
 
         # concat with y_states
@@ -133,7 +141,7 @@ class RecurrentCorrector(Corrector):
             corr_prev_pred = comb_states.new_zeros(comb_states.shape[0], 1,
                                               self.output_size)
             #print(corr_prev_pred.shape)
-        for t in range(x.shape[1]):
+        for t in range(reversed_input.shape[1]):
             comb_i = comb_states[:, t, :].unsqueeze(1)
             #print(comb_i.shape)
             # feed in both previous prediction and combination of states
@@ -141,10 +149,12 @@ class RecurrentCorrector(Corrector):
             #print("inpi", input_i.shape)
             # TODO might add layers here to make rnn smaller
             rnn_output, hidden = self.output_rnn(input_i, hx=hidden)
-            corr_prev_pred = self.corr_activation(self.corr_output_layer(rnn_output))
-            reward_prev_pred = self.reward_activation(self.reward_output_layer(rnn_output))
+            corr_prev_pred = self.corr_activation(
+                self.corr_output_layer(rnn_output))
+            reward_prev_pred = self.reward_activation(
+                self.reward_output_layer(rnn_output))
             # TODO could also feed correct reward as history
-            corr_prev_pred = corr_prev_pred*(1-reward_prev_pred)
+            corr_prev_pred = torch.mul(corr_prev_pred, (1-reward_prev_pred))
             corr_outputs.append(corr_prev_pred.squeeze(1))
             reward_outputs.append(reward_prev_pred.squeeze(1))
         corr_outputs = torch.stack(corr_outputs, dim=1)

@@ -5,6 +5,7 @@ import time
 import os
 import numpy as np
 import shutil
+import itertools
 
 
 import torch
@@ -328,15 +329,13 @@ class TrainManager:
                         valid_hypotheses, corr_valid_hypotheses, \
                         valid_hypotheses_raw, corr_valid_hypotheses_raw,\
                         valid_attention_scores, corr_valid_attention_scores, \
-                        corrections, rewards = validate_on_data(
+                        corrections, rewards, reward_targets = validate_on_data(
                             batch_size=self.batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
                             criterion=self.criterion)
-
-                    # TODO evaluation of reward prediction
 
                     # TODO decide whether to write checkpoint: use corr?
                     if self.ckpt_metric == "loss":
@@ -404,39 +403,60 @@ class TrainManager:
                         self.logger.debug("\tRewards: {}".format(
                             [(t, r[0]) for t, r in
                              zip(valid_hypotheses_raw[p], rewards[p])]))
+                        self.logger.debug("\tGold rewards: {}".format(
+                            [(t, r[0]) for t, r in
+                             zip(valid_hypotheses_raw[p], reward_targets[p])]))
                     valid_duration = time.time() - valid_start_time
                     total_valid_duration += valid_duration
+
+                    # MSE of reward model
+                    assert len(reward_targets) == len(rewards)
+
+                    # collect all rewards in one big array
+                    # (all valid instances, all time steps)
+                    rewards_flat = np.array(list(
+                        itertools.chain.from_iterable(rewards))).flatten()
+                    reward_targets_flat = np.array(list(
+                        itertools.chain.from_iterable(reward_targets))).flatten()
+                    assert rewards_flat.shape == reward_targets_flat.shape
+
+                    reward_mse = np.mean((reward_targets_flat-rewards_flat)**2)
+
+                    reward_corr = np.corrcoef(reward_targets_flat.astype(float),
+                                              rewards_flat)[0, 1]
+
                     self.logger.info(
                         'Validation result at epoch {}, step {}: {}: {:.5f}'
-                        ' (sent: {:.5f}), corr {}: {:.5f} (sent: {:.5f}), '
+                        ' (sent: {:.5f}), corr {}: {:.5f} (sent: {:.5f}),'
+                        ' reward MSE: {:.5f}, correl.: {:.5f}, '
                         'loss: {:.5f}, ppl: {:.5f}, duration: {:.4f}s'.format(
                             epoch_no+1, self.steps, self.eval_metric,
                             valid_score, valid_sent_score, self.eval_metric,
                             corr_valid_score,
                             corr_valid_sent_score,
+                            reward_mse, reward_corr,
                             valid_loss, valid_ppl, valid_duration))
+
+                    # TODO check if this moment computation is correct
+                    # since corrections contains lists
+                    # it is not flattened
                     corrections_means = corrections.mean()
                     corrections_std = np.sqrt(
                         np.mean((corrections - corrections_means) ** 2))
                     self.logger.info("Correction moments: "
                                      "mean={:.5f}, std={:.5f}.".format(
                         corrections_means, corrections_std))
-                    rewards_means = rewards.mean()
-                    rewards_std = np.sqrt(
-                        np.mean((rewards - rewards_means) ** 2))
+                    rewards_means = rewards_flat.mean()
+                    rewards_std = np.std(rewards_flat)
                     self.logger.info("Reward moments: "
                                      "mean={:.5f}, std={:.5f}.".format(
                         rewards_means, rewards_std))
 
-                    # measure correlation between reward and corr mean
-                    # corrections: valid_size x time x hidden
-                    # rewards: valid_size x time x 1
-                    self.logger.info(
-                        "Pearson correl: abs(corr) & rewards: {}".format(
-                            np.corrcoef(
-                                np.abs(corrections).mean(2).flatten(),
-                                rewards.flatten())[0, 1]))
-                     # mean per position
+                    target_rewards_means = reward_targets_flat.mean()
+                    target_rewards_std = np.std(reward_targets_flat)
+                    self.logger.info("Target reward moments: "
+                                     "mean={:.5f}, std={:.5f}.".format(
+                        target_rewards_means, target_rewards_std))
 
                     # find examples where corr improved (token acc or sbleu)
                     max_examples = self.print_valid_sents
@@ -746,7 +766,8 @@ def train(cfg_file):
         loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
-        attention_scores, corr_attention_scores, corrections, rewards =\
+        attention_scores, corr_attention_scores, corrections, \
+        rewards, reward_targets =\
             validate_on_data(
                 data=test_data, batch_size=trainer.batch_size,
                 eval_metric=trainer.eval_metric, level=trainer.level,

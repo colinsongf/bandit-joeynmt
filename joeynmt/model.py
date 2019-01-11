@@ -101,6 +101,7 @@ class Model(nn.Module):
         :param trg_input:
         :param src_mask:
         :param src_lengths:
+        :param correct: run corrector part as well
         :return: decoder outputs
         """
         encoder_output, encoder_hidden = self.encode(src=src,
@@ -120,33 +121,9 @@ class Model(nn.Module):
             # loss: -log(P(r|NMT,o_t))
             # TODO decoder predictions: what if beam search? (for training always greedy)
             greedy_pred = torch.argmax(outputs, dim=-1).cpu().numpy()  # batch x length
-            #print("pred", greedy_pred.shape, greedy_pred)
-            # print("flipped", np.flip(greedy_pred, axis=1))
-            # compute mask with numpy
-            eos = np.where(greedy_pred == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
-            #print("np eos", eos)
-            # mark everything after first eos with 1, even if non-eos
-            eos_filled = np.where(np.cumsum(eos, axis=1)>=1, 1, 0)
-            # then create mask with 0s after first eos
-            mask = np.where(np.cumsum(eos_filled, axis=1)>1, 0, 1)
-            #print("np mask", mask)
-            rev_pred_mask = outputs.new_tensor(np.flip(mask, axis=1).copy(),
-                                               dtype=torch.uint8)
-            # reverse the prediction to read it in backwards
-            rev_predicted = outputs.new_tensor(
-                np.flip(greedy_pred, axis=1).copy(), dtype=torch.long)  # flip in time (copy is needed for contiguity)
-            #print("EOS ID", self.trg_vocab.stoi[EOS_TOKEN])
-            #eos = torch.where(rev_predicted.eq(self.trg_vocab.stoi[EOS_TOKEN]),
-            #                  outputs.new_full([1], 1),
-            #                  outputs.new_full([1], 0))
-            #print("eos?", eos)
-            #rev_pred_mask = torch.where(torch.cumsum(eos, dim=1).lt(1),  # lt since flipped
-            #                            outputs.new_full([1], 1),
-            #                            outputs.new_full([1], 0)).unsqueeze(1).byte()
-            #rint("mask", rev_pred_mask)
-            # TODO is mask even needed?
-            pred_length = rev_pred_mask.sum(1)
-            #print("len", pred_length)
+
+            rev_predicted, rev_pred_mask, pred_length = \
+                self._revert_prepare_seq(seq=greedy_pred, aux_tensor=outputs)
 
             # predict corrections
             corrections, rewards = self.correct(
@@ -162,9 +139,33 @@ class Model(nn.Module):
                         unrol_steps=unrol_steps,
                         corrections=corrections*(1-rewards))
             return greedy_pred, corrections, rewards, \
-                   corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors
+                corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors
 
         return decoder_output
+
+    def _revert_prepare_seq(self, seq, aux_tensor):
+        """
+        Revert a sequence of predictions (np.array, no gradient flow!)
+        and generate mask and length
+        :param seq: batch_size x time
+        :param aux_tensor: tensor to create new tensor like
+        :return:
+        """
+        # compute mask with numpy
+        eos = np.where(seq == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
+        # mark everything after first eos with 1, even if non-eos
+        eos_filled = np.where(np.cumsum(eos, axis=1) >= 1, 1, 0)
+        # then create mask with 0s after first eos
+        mask = np.where(np.cumsum(eos_filled, axis=1) > 1, 0, 1)
+
+        # reverse the prediction to read it in backwards
+        # flip in time (copy is needed for contiguity)
+        rev_seq = aux_tensor.new_tensor(
+            np.flip(seq, axis=1).copy(), dtype=torch.long)
+        rev_seq_mask = aux_tensor.new_tensor(np.flip(mask, axis=1).copy(),
+                                             dtype=torch.uint8)
+        seq_length = rev_seq_mask.sum(1)
+        return rev_seq, rev_seq_mask, seq_length
 
     def correct(self, y, y_length, mask, y_states):
         """
@@ -213,7 +214,7 @@ class Model(nn.Module):
 
     def get_xent_loss_for_batch(self, batch, criterion):
         """
-        Compute non-normalized loss and number of tokens for a batch
+        Compute non-normalized loss for MT part of model
 
         :param batch:
         :param criterion:
@@ -234,15 +235,47 @@ class Model(nn.Module):
         return batch_loss
 
     def get_corr_loss_for_batch(self, batch, criterion, logging_fun=None):
-        greedy_pred, corrections, rewards, corr_outputs, corr_hidden, \
+        """
+        Compute non-normalized loss for batch for corrector
+
+        :param batch:
+        :param criterion:
+        :param logging_fun:
+        :return:
+        """
+        original_pred, corrections, rewards, corr_outputs, corr_hidden, \
         corr_att_probs, corr_att_vectors = self.forward(
             src=batch.src, trg_input=batch.trg_input, correct=True,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
 
+        # reward model is trained to predict whether mt predictions are correct
+        # the targets for this model are computed dynamically
+        reward_targets = np.expand_dims(np.equal(batch.trg.cpu().numpy(),
+                                  original_pred).astype(int), 2)
+        assert reward_targets.shape == rewards.shape  # batch x time x 1
+
+        # loss is MSE between targets and predictions
+        reward_loss = torch.mean(
+            (rewards.new(reward_targets)-rewards)**2)
+        #print("reward", reward_loss)
+        #print("*coeff", reward_loss*self.corrector.reward_coeff)
+
+        # loss for correction: log-likelihood of reference under corrected model
+        # compute log probs of correction
+        log_probs = F.log_softmax(corr_outputs, dim=-1)
+
+        # compute batch loss for corrector
+        corrector_loss = criterion(
+            input=log_probs.contiguous().view(-1, log_probs.size(-1)),
+            target=batch.trg.contiguous().view(-1))
+
+        # reward loss gets weighed by a coefficient since it's on a diff. scale
+        total_loss = corrector_loss+self.corrector.reward_coeff*reward_loss
+
         if logging_fun is not None:
             logging_fun("before corr: {}".format(
                 " ".join(arrays_to_sentences(
-                    greedy_pred, vocabulary=self.trg_vocab)[0])))
+                    original_pred, vocabulary=self.trg_vocab)[0])))
             corr_pred = torch.argmax(corr_outputs, dim=2).cpu().numpy()
             logging_fun("after corr: {}".format(
                 " ".join(arrays_to_sentences(
@@ -250,32 +283,12 @@ class Model(nn.Module):
             logging_fun("ref: {}".format(
                 " ".join(arrays_to_sentences(
                     batch.trg, vocabulary=self.trg_vocab)[0])))
-
-        # loss for correction is log likelihood of ref
-
-        # supervision: identical to reference or not
-        #print("gold seq", batch.trg, batch.trg.shape)  # batch x time
-        # TODO take original sequence
-        #print("pred seq", greedy_pred, greedy_pred.shape) # batch x time
-        #print("corr seq",torch.argmax(corr_outputs, dim=2))
-        reward_targets = np.equal(batch.trg.cpu().numpy(), greedy_pred).astype(int)
-        #print("gold rewards", reward_targets)
-        #print("pred", rewards.squeeze(-1), rewards.shape)
-        reward_loss = torch.mean((rewards.new(reward_targets)-rewards.squeeze(-1))**2)
-        #print("reward", reward_loss)
-        #print("*coeff", reward_loss*self.corrector.reward_coeff)
-
-
-        # compute log probs of correction
-        log_probs = F.log_softmax(corr_outputs, dim=-1)
-
-        # compute batch loss
-        batch_loss = criterion(
-            input=log_probs.contiguous().view(-1, log_probs.size(-1)),
-            target=batch.trg.contiguous().view(-1))
-       # print("xent", batch_loss)
-
-        total_loss = batch_loss+self.corrector.reward_coeff*reward_loss
+            logging_fun("total corrector loss: {}; "
+                        "corrector xent: {:.2f} ({:.2f}\%), "
+                        "reward MSE: {:.2f} ({:.2f}\%) ".format(
+                            total_loss,
+                            corrector_loss, corrector_loss/total_loss*100,
+                            reward_loss, reward_loss/total_loss*100))
 
         return total_loss
 
@@ -300,7 +313,8 @@ class Model(nn.Module):
         # first pass decoding
         # greedy decoding
         if beam_size == 0:
-            stacked_output, stacked_attention_scores, stacked_att_vectors = greedy(
+            stacked_output, stacked_attention_scores, \
+            stacked_att_vectors = greedy(
                 encoder_hidden=encoder_hidden, encoder_output=encoder_output,
                 src_mask=batch.src_mask, embed=self.trg_embed,
                 bos_index=self.bos_index, decoder=self.decoder,
@@ -319,33 +333,11 @@ class Model(nn.Module):
                             return_attention=True,
                             return_attention_vectors=True,
                             corrections=None)
-         #   print("stacked att_vec", stacked_att_vectors.shape)
-         #   print("stacked_outpit", stacked_output.shape)
-
-        # corrector predicts perturbation of hidden state that needs correction
-        # input: attention vector of forwards RNN, hidden state of backwards RNN
-        # R_corr: c_t = RNN([fw, bw, o_t-1], c_t-1), o_t = tanh(Linear(c_t))
-        # loss: -log(P(r|NMT,o_t))
         # TODO decoder predictions: for training always greedy
-       # greedy_pred = torch.argmax(stacked_output, dim=-1).cpu().numpy()  # batch x length
-        #print("pred", greedy_pred.shape, greedy_pred)
-        # print("flipped", np.flip(greedy_pred, axis=1))
-        # compute mask with numpy
-        eos = np.where(stacked_output == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
-        #print("np eos", eos)
-        # mark everything after first eos with 1, even if non-eos
-        eos_filled = np.where(np.cumsum(eos, axis=1)>=1, 1, 0)
-        # then create mask with 0s after first eos
-        mask = np.where(np.cumsum(eos_filled, axis=1)>1, 0, 1)
-        #print("np mask", mask)
-        rev_pred_mask = encoder_output.new_tensor(np.flip(mask, axis=1).copy(),
-                                           dtype=torch.uint8)
-        # reverse the prediction to read it in backwards
-        rev_predicted = encoder_output.new_tensor(
-            np.flip(stacked_output, axis=1).copy(), dtype=torch.long)  # flip in time (copy is needed for contiguity)
 
-        # TODO is mask even needed?
-        pred_length = rev_pred_mask.sum(1)
+        rev_predicted, rev_pred_mask, pred_length = \
+            self._revert_prepare_seq(seq=stacked_output,
+                                     aux_tensor=encoder_output)
 
         # predict corrections
         corrections, rewards = self.correct(

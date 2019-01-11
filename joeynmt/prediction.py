@@ -44,6 +44,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         corr_valid_attention_scores = []
         all_corrections = []
         all_rewards = []
+        all_reward_targets = []
         total_loss = 0
         total_ntokens = 0
         for valid_i, valid_batch in enumerate(iter(valid_iter), 1):
@@ -71,6 +72,16 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                         batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
                         max_output_length=max_output_length)
 
+            # problem: rewards are predicted for max_output_length
+            # but reward_targets are only computed for all targets in reference
+            # we can only evaluate the rewards in comparison to the reference
+            ref_max_length = batch.trg.shape[1]
+            rewards_cut = rewards[:, :ref_max_length]
+            reward_targets = np.expand_dims(
+                np.equal(batch.trg.cpu().numpy(),
+                         output[:, :ref_max_length]).astype(int), 2)
+            assert reward_targets.shape == rewards_cut.shape
+
             # sort outputs back to original order
             corr_all_outputs.extend(corr_output[sort_reverse_index])
             all_outputs.extend(output[sort_reverse_index])
@@ -82,8 +93,10 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                 if corr_attention_scores is not None else [])
             all_corrections.extend(corrections[sort_reverse_index]
                                    if corrections is not None else [])
-            all_rewards.extend(rewards[sort_reverse_index]
+            all_rewards.extend(rewards_cut[sort_reverse_index]
                                if corrections is not None else [])
+            all_reward_targets.extend(reward_targets[sort_reverse_index]
+                                      if corrections is not None else [])
 
         assert len(all_outputs) == len(data)
 
@@ -95,9 +108,6 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         else:
             valid_loss = -1
             valid_ppl = -1
-
-        # gold rewards
-        # TODO
 
         # decode back to symbols
         decoded_valid = arrays_to_sentences(arrays=all_outputs,
@@ -167,6 +177,13 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             current_valid_score = -1
             corr_current_valid_score = -1
 
+   # print(len(all_reward_targets))
+   # print(all_reward_targets[0].shape)
+   # print("ALL", np.array(all_reward_targets).shape)
+   # print(np.array(all_reward_targets)[0].shape, np.array(all_reward_targets)[1].shape)
+   # print(all_reward_targets)
+    # elements of all_corrections/rewards/reward_targets all have diff. length!
+
     return current_valid_score, current_sent_score, \
            corr_current_valid_score, corr_current_sent_score, \
            valid_loss, valid_ppl, valid_sources, \
@@ -174,7 +191,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
            valid_hypotheses, corr_valid_hypotheses,\
            decoded_valid, corr_decoded_valid, \
            valid_attention_scores, corr_valid_attention_scores, \
-           np.array(all_corrections), np.array(all_rewards)
+           np.array(all_corrections), all_rewards, \
+           all_reward_targets
 
 
 def test(cfg_file,
@@ -247,7 +265,7 @@ def test(cfg_file,
             hypotheses, corr_hypotheses, \
             hypotheses_raw, corr_hypotheses_raw, \
             attention_scores, corr_attention_scores, \
-            corrections, rewards = validate_on_data(
+            corrections, rewards, reward_targets = validate_on_data(
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
                 use_cuda=use_cuda, criterion=None, beam_size=beam_size,
