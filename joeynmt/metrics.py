@@ -106,7 +106,6 @@ def f1_bin(hypotheses, references):
     tp_0 = ((1 - hypotheses) & (1 - references)).sum()
     fp_1 = (hypotheses & ~references).sum()  # same as fn_0
     fn_1 = (~hypotheses & references).sum()  # same as fp_0
-    print(tp_1, tp_0, fp_1, fn_1)
     assert tp_0 + tp_1 + fn_1 + fp_1 == hypotheses.size
     prec_1 = tp_1 / (tp_1 + fp_1)
     rec_1 = tp_1 / (tp_1 + fn_1)

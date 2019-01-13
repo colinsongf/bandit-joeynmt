@@ -77,8 +77,9 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # we can only evaluate the rewards in comparison to the reference
             ref_max_length = batch.trg.shape[1]
             rewards_cut = rewards[:, :ref_max_length]
+            # ref may be longer than output
             reward_targets = np.expand_dims(
-                np.equal(batch.trg.cpu().numpy(),
+                np.equal(batch.trg.cpu().numpy()[:, :max_output_length],
                          output[:, :ref_max_length]).astype(int), 2)
             assert reward_targets.shape == rewards_cut.shape
 
