@@ -63,11 +63,13 @@ model:
         bidirectional: True
         dropout: 0.1
         num_layers: 1
+        freeze: False
     decoder:
         type: "lstm"
         embeddings:
             embedding_dim: 16
             scale: False
+            freeze: False
         hidden_size: 64
         dropout: 0.1
         hidden_dropout: 0.1
@@ -75,9 +77,11 @@ model:
         input_feeding: True
         bridge: False
         attention: "bahdanau"
+        freeze: False
     corrector:
         type: "lstm"
         hidden_size: 33
         num_layers: 1
         reward_coeff: 1000
         shift_rewards: True
+        freeze: False
