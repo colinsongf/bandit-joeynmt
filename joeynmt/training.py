@@ -194,6 +194,11 @@ class TrainManager:
             self.logger.info("Loading model from {}".format(model_load_path))
             self.load_checkpoint(model_load_path)
 
+        self.trainable_params = [n for (n, p) in self.model.named_parameters()
+                            if p.requires_grad]
+        self.logger.info("Trainable parameters: {}".format(
+            self.trainable_params))
+
     def save_checkpoint(self):
         """
         Save the model's current parameters and state to a checkpoint.
@@ -574,10 +579,6 @@ class TrainManager:
         :param batch:
         :return:
         """
-        # standard xent loss
-        batch_loss = self.model.get_xent_loss_for_batch(
-            batch=batch, criterion=self.criterion)
-
         # normalize batch loss
         if self.normalization == "batch":
             normalizer = batch.nseqs
@@ -586,9 +587,16 @@ class TrainManager:
         else:
             raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
+        # standard xent loss
+        batch_loss = self.model.get_xent_loss_for_batch(
+            batch=batch, criterion=self.criterion)
+
         norm_batch_loss = batch_loss.sum() / normalizer
-        # compute gradient
-        norm_batch_loss.backward()
+
+        # only if decoder and embeddings not frozen
+        if not all(["corrector" in p for p in self.trainable_params]):
+            # compute gradient
+            norm_batch_loss.backward()
         # grads for corrector params are zero here
         #print("grad norms after Xent", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
 
@@ -610,16 +618,18 @@ class TrainManager:
         # TODO add RL loss! gain in BLEU
         # TODO maybe penalize even more
 
-        grads = {}
-        for name, param in self.corrector_params.items():
-            # compute the gradient of the loss wrt to each of the params
-            grad = torch.autograd.grad(corrector_loss,
-                                       inputs=param, retain_graph=True)[0]
-            grads[name] = grad
-            assert grad.shape == param.shape
-            param.grad = grad
-        #print(torch.autograd.grad(corrector_loss, inputs=inputs))
-        #print("grad norms for corr: ", [(k, torch.norm(v, 2)) for k, v in grads.items()])
+        # only train corrector if trainable params exist
+        if any(["corrector" in p for p in self.trainable_params]):
+            grads = {}
+            for name, param in self.corrector_params.items():
+                # compute the gradient of the loss wrt to each of the params
+                grad = torch.autograd.grad(corrector_loss,
+                                           inputs=param, retain_graph=True)[0]
+                grads[name] = grad
+                assert grad.shape == param.shape
+                param.grad = grad
+            #print(torch.autograd.grad(corrector_loss, inputs=inputs))
+            #print("grad norms for corr: ", [(k, torch.norm(v, 2)) for k, v in grads.items()])
 
         if not self.steps % self.logging_freq:
             self.logger.debug("Gradient norms (w/o clipping): {}".format(
