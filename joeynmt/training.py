@@ -6,6 +6,7 @@ import os
 import numpy as np
 import shutil
 import itertools
+from collections import OrderedDict
 
 
 import torch
@@ -50,19 +51,22 @@ class TrainManager:
         if model.corrector is not None:
             # 2 sets of parameters -> 2 optimizers
             # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice
-            all_params = model.named_parameters()
-            corrector_params = {k:v for (k,v) in all_params if "corrector" in k}
-            self.corrector_params = corrector_params
+            all_params = list(model.named_parameters())
+            # sorting is required to keep track of parameter groups for optimizers
+            sorted_corr = sorted(
+                {k: v for (k, v) in all_params if "corrector" in k}.items())
+            self.corrector_params = OrderedDict(sorted_corr)
             self.logger.debug(
-                "CORRECTOR PARAMS: {}".format(corrector_params.keys()))
+                "CORRECTOR PARAMS: {}".format(self.corrector_params.keys()))
             self.logger.debug("CORRECTOR size: {}".format(
                 sum([np.prod(p.size()) for p in self.corrector_params.values()])
             ))
-            mt_params = {k:v for (k,v) in model.named_parameters()
-                         if k not in corrector_params.keys()}
-            self.logger.debug("MT PARAMS: {}".format(mt_params.keys()))
+            sorted_mt = sorted(
+                {k: v for (k, v) in all_params if "corrector" not in k}.items())
+            self.mt_params = OrderedDict(sorted_mt)
+            self.logger.debug("MT PARAMS: {}".format(self.mt_params.keys()))
             self.logger.debug("MT size: {}".format(
-                sum([np.prod(p.size()) for p in mt_params.values()])))
+                sum([np.prod(p.size()) for p in self.mt_params.values()])))
 
             for k, v in model.named_parameters():
                 if v.requires_grad:
@@ -73,18 +77,18 @@ class TrainManager:
             self.optimizer = {}
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer["mt"] = torch.optim.Adam(
-                    mt_params.values(), weight_decay=weight_decay,
+                    self.mt_params.values(), weight_decay=weight_decay,
                     lr=learning_rate["mt"])
                 self.optimizer["corrector"] = torch.optim.Adam(
-                    corrector_params.values(), weight_decay=weight_decay,
+                    self.corrector_params.values(), weight_decay=weight_decay,
                     lr=learning_rate["corrector"])
             else:
                 # default
                 self.optimizer["mt"] = torch.optim.SGD(
-                    mt_params.values(), weight_decay=weight_decay,
+                    self.mt_params.values(), weight_decay=weight_decay,
                     lr=learning_rate["mt"])
                 self.optimizer["corrector"] = torch.optim.SGD(
-                    corrector_params.values(), weight_decay=weight_decay,
+                    self.corrector_params.values(), weight_decay=weight_decay,
                     lr=learning_rate["corrector"])
         else:
             if train_config["optimizer"].lower() == "adam":
@@ -122,7 +126,7 @@ class TrainManager:
                         threshold_mode='abs',
                         factor=train_config.get("decrease_factor", 0.1),
                         patience=train_config.get("patience", 10))
-                                      for k, v in self.optimizer.items()}
+                                      for k, v in sorted(self.optimizer.items())}
                 else:
                     # learning rate scheduler
                     self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -138,7 +142,7 @@ class TrainManager:
                     self.scheduler = {k: torch.optim.lr_scheduler.StepLR(
                         optimizer=v,
                         step_size=train_config.get("decaying_step_size", 10))
-                                      for k, v in self.optimizer.items()}
+                                      for k, v in sorted(self.optimizer.items())}
                 else:
                     self.scheduler = torch.optim.lr_scheduler.StepLR(
                         optimizer=self.optimizer,
@@ -149,7 +153,7 @@ class TrainManager:
                     self.scheduler = {k: torch.optim.lr_scheduler.ExponentialLR(
                         optimizer=v,
                         gamma=train_config.get("decrease_factor", 0.99)
-                    ) for k, v in self.optimizer}
+                    ) for k, v in sorted(self.optimizer.items())}
                 else:
                     self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
                         optimizer=self.optimizer,
@@ -195,7 +199,7 @@ class TrainManager:
             self.load_checkpoint(model_load_path)
 
         self.trainable_params = [n for (n, p) in self.model.named_parameters()
-                            if p.requires_grad]
+                                 if p.requires_grad]
         self.logger.info("Trainable parameters: {}".format(
             self.trainable_params))
 
@@ -218,9 +222,9 @@ class TrainManager:
             state["scheduler_state"] = self.scheduler.state_dict() if \
                 self.scheduler is not None else None
         else:
-            for k,v in self.optimizer.items():
+            for k, v in sorted(self.optimizer.items()):
                 state["{}_optimizer_state".format(k)] = v.state_dict()
-            for k,v in self.scheduler.items():
+            for k, v in sorted(self.scheduler.items()):
                 state["{}_scheduler_state".format(k)] = v.state_dict()
                 #if self.scheduler is not None else None,
         torch.save(state, model_path)
@@ -235,11 +239,24 @@ class TrainManager:
         model_checkpoint = load_model_from_checkpoint(
             path=path, use_cuda=self.use_cuda)
 
-        # restore model and optimizer parameters
+        # restore model
         self.model.load_state_dict(model_checkpoint["model_state"])
-        self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
 
-        if model_checkpoint["scheduler_state"] is not None:
+        # restore optimizer parameters
+        if type(self.optimizer) == dict:
+            self.optimizer["mt"].load_state_dict(
+                model_checkpoint["mt_optimizer_state"])
+            self.optimizer["corrector"].load_state_dict(
+                model_checkpoint["corrector_optimizer_state"])
+        else:
+            self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
+
+        if type(self.scheduler) == dict:
+            self.scheduler["mt"].load_state_dict(
+                model_checkpoint["mt_scheduler_state"])
+            self.scheduler["corrector"].load_state_dict(
+                model_checkpoint["corrector_scheduler_state"])
+        else:
             self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
 
         # restore counts
@@ -251,6 +268,15 @@ class TrainManager:
         # move parameters to cuda
         if self.use_cuda:
             self.model.cuda()
+            # TODO needed?
+            for state in self.optimizer["mt"].state.values():
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.cuda()
+            for state in self.optimizer["corrector"].state.values():
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.cuda()
 
     def _make_model_dir(self, model_dir):
         """
@@ -694,7 +720,7 @@ class TrainManager:
         # ignores other param groups for now
         if type(self.optimizer) is dict:
             current_lr = {k: v.param_groups[0]["lr"] for
-                          k,v in self.optimizer.items()}
+                          k, v in sorted(self.optimizer.items())}
 
         else:
             for param_group in self.optimizer.param_groups:
