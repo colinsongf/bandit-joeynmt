@@ -1,7 +1,7 @@
 # coding: utf-8
 
 import sacrebleu
-
+import numpy as np
 
 def chrf(hypotheses, references, corpus=True):
     """
@@ -116,3 +116,29 @@ def f1_bin(hypotheses, references):
     f1_0 = 2 * (prec_0 * rec_0) / (prec_0 + rec_0) if (
                                                       prec_0 + rec_0) > 0 else 0
     return f1_1, f1_0
+
+
+def token_edit_reward(gold, pred, shifted=False):
+    # print("Computing rewards")
+    # print("gold", gold)
+    # print("pred", pred)
+    rewards = np.zeros_like(pred, dtype=float)
+    assert gold.shape == pred.shape
+    length = gold.shape[1]
+    # TODO use length of translation (EOS), not batch
+    # TODO use number of occurrences, penalize repetitions
+    for j, (g, p) in enumerate(zip(gold, pred)):  # iterate over batch
+        for k, (g_i, p_i) in enumerate(zip(g, p)):  # iterate over time
+            if p_i == g_i:
+                rewards[j, k] = 1.0
+            elif p_i in g and shifted:
+                # find new positions of p_i in g
+                p_index = np.where(g == p_i)
+                # select the position that is closest
+                closest_dist = np.abs(np.min(k - p_index[0]))
+                shift_reward = 1 - (closest_dist / length)
+                rewards[j, k] = shift_reward
+                # print("shift reward for moving {} pos.: {}".format(closest_dist, shift_reward))
+            else:
+                continue
+    return rewards

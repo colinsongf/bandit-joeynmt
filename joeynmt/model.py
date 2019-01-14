@@ -12,6 +12,7 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
 from joeynmt.helpers import arrays_to_sentences
+from joeynmt.metrics import token_edit_reward
 
 
 def build_model(cfg: dict = None,
@@ -250,8 +251,14 @@ class Model(nn.Module):
 
         # reward model is trained to predict whether mt predictions are correct
         # the targets for this model are computed dynamically
-        reward_targets = np.expand_dims(np.equal(batch.trg.cpu().numpy(),
-                                  original_pred).astype(int), 2)
+        #reward_targets = np.expand_dims(np.equal(batch.trg.cpu().numpy(),
+        #                          original_pred).astype(int), 2)
+
+
+        reward_targets = np.expand_dims(token_edit_reward(batch.trg.cpu().numpy(),
+                                      original_pred.astype(int),
+                                      shifted=self.corrector.shift_rewards), 2)
+
         assert reward_targets.shape == rewards.shape  # batch x time x 1
 
         # loss is MSE between targets and predictions

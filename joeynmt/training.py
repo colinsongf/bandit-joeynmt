@@ -409,6 +409,7 @@ class TrainManager:
                         itertools.chain.from_iterable(rewards))).flatten()
                     reward_targets_flat = np.array(list(
                         itertools.chain.from_iterable(reward_targets))).flatten()
+                    bin_reward_targets_flat = np.equal(reward_targets_flat, 1).astype(int)
                     assert rewards_flat.shape == reward_targets_flat.shape
 
                     reward_mse = np.mean((reward_targets_flat-rewards_flat)**2)
@@ -417,13 +418,15 @@ class TrainManager:
                                               rewards_flat)[0, 1]
                     # transform rewards into binary labels with 0.5 as threshold
                     # then compute accuracy
-                    bin_rewards_flat = np.greater_equal(rewards_flat, 0.5).astype(int)
+                    bin_rewards_flat = np.greater_equal(
+                        rewards_flat, 0.5).astype(int)
                     bin_reward_acc = np.equal(bin_rewards_flat,
-                                              reward_targets_flat)\
+                                              bin_reward_targets_flat)\
                                          .sum()/reward_targets_flat.size
 
                     # compute f1 for both classes
-                    f1_1, f1_0 = f1_bin(bin_rewards_flat, reward_targets_flat)
+                    f1_1, f1_0 = f1_bin(bin_rewards_flat,
+                                        bin_reward_targets_flat)
                     f1_prod = f1_1*f1_0
 
                     self.logger.info(

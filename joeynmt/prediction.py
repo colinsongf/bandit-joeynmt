@@ -7,7 +7,8 @@ from joeynmt.constants import PAD_TOKEN
 from joeynmt.helpers import load_data, arrays_to_sentences, bpe_postprocess, \
     load_config, get_latest_checkpoint, make_data_iter, \
     load_model_from_checkpoint, store_attention_plots, store_correction_plots
-from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
+from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy, \
+    token_edit_reward
 from joeynmt.model import build_model
 from joeynmt.batch import Batch
 
@@ -78,9 +79,15 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             ref_max_length = batch.trg.shape[1]
             rewards_cut = rewards[:, :ref_max_length]
             # ref may be longer than output
+
             reward_targets = np.expand_dims(
-                np.equal(batch.trg.cpu().numpy()[:, :max_output_length],
-                         output[:, :ref_max_length]).astype(int), 2)
+                token_edit_reward(
+                    gold=batch.trg.cpu().numpy()[:, :max_output_length],
+                    pred=output[:, :ref_max_length],
+                    shifted=model.corrector.shift_rewards),
+                2)
+               # np.equal(batch.trg.cpu().numpy()[:, :max_output_length],
+               #          output[:, :ref_max_length]).astype(int), 2)
             assert reward_targets.shape == rewards_cut.shape
 
             # sort outputs back to original order

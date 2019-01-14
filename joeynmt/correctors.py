@@ -31,6 +31,7 @@ class RecurrentCorrector(Corrector):
                  attention: str = "bahdanau",
                  encoder: Encoder = None,
                  reward_coeff: float = 0,
+                 shift_rewards: bool = False,
                  **kwargs):
 
         super(RecurrentCorrector, self).__init__()
@@ -43,6 +44,7 @@ class RecurrentCorrector(Corrector):
         self.type = type
         self.output_size = decoder_size
         self.reward_coeff = reward_coeff
+        self.shift_rewards = shift_rewards
 
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
@@ -141,6 +143,8 @@ class RecurrentCorrector(Corrector):
             corr_prev_pred = comb_states.new_zeros(comb_states.shape[0], 1,
                                               self.output_size)
             #print(corr_prev_pred.shape)
+        # TODO add attention and attention vector as input
+
         for t in range(reversed_input.shape[1]):
             comb_i = comb_states[:, t, :].unsqueeze(1)
             #print(comb_i.shape)
