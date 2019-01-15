@@ -22,6 +22,7 @@ class RecurrentCorrector(Corrector):
                  hidden_size: int = 0,
                  num_layers: int = 0,
                  dropout: float = 0.,
+                 hidden_dropout: float = 0.,
                  bridge: bool = False,
                  bidirectional: bool = False,
                  decoder_size: int = 0,
@@ -58,10 +59,15 @@ class RecurrentCorrector(Corrector):
 
         # output layer: receives previous prediction as input
         # 1 layer RNN on concatenated decoder and bw states
-        self.output_rnn = rnn(decoder_size+hidden_size+decoder_size,
-                              hidden_size, num_layers=1, batch_first=True)
+        self.output_rnn = rnn(
+            decoder_size+hidden_size+decoder_size+hidden_size,
+            hidden_size, num_layers=1, batch_first=True)
 
         self.corr_output_layer = nn.Linear(hidden_size, decoder_size)
+
+        # combine output with context vector before output layer (Luong-style)
+        self.att_vector_layer = nn.Linear(
+            hidden_size + encoder.output_size, hidden_size, bias=True)
 
         # predict a reward
         # TODO binary?
@@ -84,20 +90,23 @@ class RecurrentCorrector(Corrector):
             self.reward_activation = torch.sigmoid
 
         # TODO integrate src attention
-        #if attention == "bahdanau":
-        #    self.attention = BahdanauAttention(hidden_size=hidden_size,
-        #                                       key_size=encoder.output_size,
-        #                                       query_size=hidden_size)
-        #elif attention == "luong":
-        #    self.attention = LuongAttention(hidden_size=hidden_size,
-        #                                    key_size=encoder.output_size)
-        #else:
-        #    raise ValueError("Unknown attention mechanism: %s" % attention)
+        if attention == "bahdanau":
+            self.attention = BahdanauAttention(hidden_size=hidden_size,
+                                               key_size=encoder.output_size,
+                                               query_size=hidden_size)
+        elif attention == "luong":
+            self.attention = LuongAttention(hidden_size=hidden_size,
+                                            key_size=encoder.output_size)
+        else:
+            raise ValueError("Unknown attention mechanism: %s" % attention)
 
         if freeze:
             for n, p in self.named_parameters():
                 print("Not training {}".format(n))
                 p.requires_grad = False
+
+        self.hidden_dropout = torch.nn.Dropout(p=hidden_dropout, inplace=False)
+
 
     def _apply_rnn(self, input):
         """
@@ -117,7 +126,8 @@ class RecurrentCorrector(Corrector):
         rnn_outputs = torch.stack(rnn_outputs, dim=1)
         return rnn_outputs
 
-    def forward(self, reversed_input, y_length, mask, y_states):
+    def forward(self, reversed_input, y_length, mask, y_states,
+                encoder_output, src_mask):
         """
         Reads the decoder output backwards,
         combines it with decoder hidden states
@@ -126,11 +136,20 @@ class RecurrentCorrector(Corrector):
         :param reversed_input: embedded, reversed decoder predictions
         :param y_length:
         :param mask:
+        :param y_states: MT decoder hidden states
+        :param encoder_output: encoder outputs, keys/values for attention
+        :param src_mask: mask on the encoder outputs
         :return:
         """
         # TODO make use of length and mask?
         rnn_outputs = self._apply_rnn(input=reversed_input)
         #print("bw rnn output", rnn_outputs.shape)  # batch x time x hidden
+
+        # pre-compute projected encoder outputs
+        # (the "keys" for the attention mechanism)
+        # this is only done for efficiency
+        if hasattr(self.attention, "compute_proj_keys"):
+            self.attention.compute_proj_keys(encoder_output)
 
         # concat with y_states
         comb_states = torch.cat([y_states, rnn_outputs], dim=2)  # batch x time x decoder.hidden_size+hidden
@@ -139,30 +158,56 @@ class RecurrentCorrector(Corrector):
         hidden = None
         corr_outputs = []
         reward_outputs = []
+        attention_probs = []
+        batch_size = comb_states.shape[0]
         with torch.no_grad():
-            corr_prev_pred = comb_states.new_zeros(comb_states.shape[0], 1,
-                                              self.output_size)
-            #print(corr_prev_pred.shape)
-        # TODO add attention and attention vector as input
+            corr_prev_pred = comb_states.new_zeros(batch_size, 1,
+                                                   self.output_size)
+            prev_att_vector = comb_states.new_zeros(
+                [batch_size, 1, self.hidden_size])
 
         for t in range(reversed_input.shape[1]):
             comb_i = comb_states[:, t, :].unsqueeze(1)
             #print(comb_i.shape)
             # feed in both previous prediction and combination of states
-            input_i = torch.cat([comb_i, corr_prev_pred], dim=2)
-            #print("inpi", input_i.shape)
+            # and previous attention vector
+            # rnn_input = torch.cat([prev_embed, prev_att_vector], dim=2)
+            input_i = torch.cat([comb_i, corr_prev_pred, prev_att_vector],
+                                dim=2)
             # TODO might add layers here to make rnn smaller
             rnn_output, hidden = self.output_rnn(input_i, hx=hidden)
             corr_prev_pred = self.corr_activation(
                 self.corr_output_layer(rnn_output))
             reward_prev_pred = self.reward_activation(
                 self.reward_output_layer(rnn_output))
+
+            # use new (top) decoder layer as attention query
+            if isinstance(hidden, tuple):
+                query = hidden[0][-1].unsqueeze(1)
+            else:
+                query = hidden[-1].unsqueeze(1)  # [#layers, B, D] -> [B, 1, D]
+
+            # compute context vector using attention mechanism
+            # only use last layer for attention mechanism
+            # key projections are pre-computed
+            context, att_probs = self.attention(
+                query=query, values=encoder_output, mask=src_mask)
+
+            # return attention vector (Luong)
+            # combine context with decoder hidden state before prediction
+            att_vector_input = torch.cat([query, context], dim=2)
+            att_vector_input = self.hidden_dropout(att_vector_input)
+
+            # batch x 1 x 2*enc_size+hidden_size
+            prev_att_vector = torch.tanh(self.att_vector_layer(att_vector_input))
             # TODO could also feed correct reward as history
             corr_prev_pred = torch.mul(corr_prev_pred, (1-reward_prev_pred))
             corr_outputs.append(corr_prev_pred.squeeze(1))
             reward_outputs.append(reward_prev_pred.squeeze(1))
+            attention_probs.append(att_probs.squeeze(1))
         corr_outputs = torch.stack(corr_outputs, dim=1)
         reward_outputs = torch.stack(reward_outputs, dim=1)
+        attention_probs = torch.stack(attention_probs, dim=1)
         #print("corr_outputs", corr_outputs.shape)
 
         # read in the translation backwards
@@ -198,7 +243,7 @@ class RecurrentCorrector(Corrector):
         # make RNN as well: previous correction should influence future correction!
         #output = self.activation(self.output_layer(comb_states))
 
-        return corr_outputs, reward_outputs
+        return corr_outputs, reward_outputs, attention_probs
 
 
 

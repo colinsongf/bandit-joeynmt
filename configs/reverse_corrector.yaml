@@ -11,8 +11,8 @@ data:
     max_sent_length: 11
     voc_min_freq: 0
     voc_limit: 100
-    #src_vocab: "my_model/src_vocab.txt"
-    #trg_vocab: "my_model/trg_vocab.txt"
+    src_vocab: "reverse_bahdanau_correct/src_vocab.txt"
+    trg_vocab: "reverse_bahdanau_correct/trg_vocab.txt"
 
 testing:
     beam_size: 9
@@ -35,7 +35,7 @@ training:
     patience: 5
     decrease_factor: 0.5
     schedule_after_loss: True
-    epochs: 10
+    epochs: 1
     validation_freq: 100
     logging_freq: 20
     eval_metric: "bleu"
@@ -45,6 +45,7 @@ training:
     use_cuda: False
     max_output_length: 30
     print_valid_sents: 3
+    #load_model: "reverse_bahdanau_correct/100.ckpt"
 
 model:
     initializer: "xavier"
@@ -82,6 +83,7 @@ model:
         type: "lstm"
         hidden_size: 33
         num_layers: 1
+        attention: "bahdanau"
         reward_coeff: 1000
         shift_rewards: True
         freeze: False

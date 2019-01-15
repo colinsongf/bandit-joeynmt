@@ -360,6 +360,7 @@ class TrainManager:
                         valid_hypotheses, corr_valid_hypotheses, \
                         valid_hypotheses_raw, corr_valid_hypotheses_raw,\
                         valid_attention_scores, corr_valid_attention_scores, \
+                        corr_valid_src_attention_scores, \
                         corrections, rewards, reward_targets = validate_on_data(
                             batch_size=self.batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
@@ -577,6 +578,15 @@ class TrainManager:
                                           output_prefix="{}/corr.att.{}".format(
                                               self.model_dir,
                                               self.steps))
+                    # store src attention for corrector
+                    store_attention_plots(
+                        attentions=corr_valid_src_attention_scores,
+                        targets=valid_hypotheses_raw,
+                        sources=[s for s in valid_data.src],
+                        idx=[0, 1, 2, random_example],
+                        output_prefix="{}/corr.att.src.{}".format(
+                            self.model_dir,
+                            self.steps))
 
                     store_correction_plots(
                         corrections=corrections, rewards=rewards,
@@ -679,7 +689,8 @@ class TrainManager:
             self.optimizer["mt"].step()
             self.optimizer["corrector"].step()
             self.optimizer["mt"].zero_grad()
-            self.optimizer["corrector"].zero_grad()
+            # TODO next line throws an error since integration of attention
+            #self.optimizer["corrector"].zero_grad()
         else:
             self.optimizer.step()
             self.optimizer.zero_grad()
@@ -838,7 +849,8 @@ def train(cfg_file):
         loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
-        attention_scores, corr_attention_scores, corrections, \
+        attention_scores, corr_attention_scores, \
+        corr_src_attention_scores, corrections, \
         rewards, reward_targets =\
             validate_on_data(
                 data=test_data, batch_size=trainer.batch_size,

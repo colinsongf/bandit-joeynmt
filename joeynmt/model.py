@@ -40,7 +40,7 @@ def build_model(cfg: dict = None,
                                vocab_size=len(trg_vocab),
                                emb_size=trg_embed.embedding_dim)
     corrector = RecurrentCorrector(**cfg["corrector"],
-                                   trg_embed=trg_embed,
+                                   trg_embed=trg_embed, encoder=encoder,
                                    decoder_size=decoder.hidden_size)
 
     model = Model(encoder=encoder, decoder=decoder, corrector=corrector,
@@ -127,9 +127,10 @@ class Model(nn.Module):
                 self._revert_prepare_seq(seq=greedy_pred, aux_tensor=outputs)
 
             # predict corrections
-            corrections, rewards = self.correct(
+            corrections, rewards, corr_src_att_probs = self.correct(
                 y=rev_predicted, y_length=pred_length,
-                mask=rev_pred_mask, y_states=att_vectors)
+                mask=rev_pred_mask, y_states=att_vectors,
+                encoder_output=encoder_output, src_mask=src_mask)
 
             # run decoder again with corrections*(1-rewards)
             # if reward is 1 -> no correction
@@ -140,7 +141,7 @@ class Model(nn.Module):
                         unrol_steps=unrol_steps,
                         corrections=corrections*(1-rewards))
             return greedy_pred, corrections, rewards, \
-                corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors
+                corr_outputs, corr_hidden, corr_att_probs, corr_src_att_probs
 
         return decoder_output
 
@@ -168,7 +169,7 @@ class Model(nn.Module):
         seq_length = rev_seq_mask.sum(1)
         return rev_seq, rev_seq_mask, seq_length
 
-    def correct(self, y, y_length, mask, y_states):
+    def correct(self, y, y_length, mask, y_states, encoder_output, src_mask):
         """
         Run the corrector to predict corrections for hidden states
         :param y:
@@ -177,7 +178,8 @@ class Model(nn.Module):
         :param y_states:
         :return:
         """
-        return self.corrector(self.trg_embed(y), y_length, mask, y_states)
+        return self.corrector(self.trg_embed(y), y_length, mask,
+                              y_states, encoder_output.detach(), src_mask)
 
     def encode(self, src, src_length, src_mask):
         """
@@ -245,19 +247,17 @@ class Model(nn.Module):
         :return:
         """
         original_pred, corrections, rewards, corr_outputs, corr_hidden, \
-        corr_att_probs, corr_att_vectors = self.forward(
+        corr_att_probs, src_corr_att_probs = self.forward(
             src=batch.src, trg_input=batch.trg_input, correct=True,
             src_mask=batch.src_mask, src_lengths=batch.src_lengths)
 
         # reward model is trained to predict whether mt predictions are correct
         # the targets for this model are computed dynamically
-        #reward_targets = np.expand_dims(np.equal(batch.trg.cpu().numpy(),
-        #                          original_pred).astype(int), 2)
 
-
-        reward_targets = np.expand_dims(token_edit_reward(batch.trg.cpu().numpy(),
-                                      original_pred.astype(int),
-                                      shifted=self.corrector.shift_rewards), 2)
+        reward_targets = np.expand_dims(
+            token_edit_reward(
+                batch.trg.cpu().numpy(), original_pred.astype(int),
+                shifted=self.corrector.shift_rewards), 2)
 
         assert reward_targets.shape == rewards.shape  # batch x time x 1
 
@@ -347,12 +347,15 @@ class Model(nn.Module):
                                      aux_tensor=encoder_output)
 
         # predict corrections
-        corrections, rewards = self.correct(
+        corrections, rewards, corr_src_att_probs = self.correct(
             y=rev_predicted, y_length=pred_length,
             mask=rev_pred_mask,
             y_states=torch.tensor(stacked_att_vectors,
                                   device=rev_pred_mask.device,
-                                  dtype=torch.float32))
+                                  dtype=torch.float32),
+            encoder_output=encoder_output,
+            src_mask=batch.src_mask
+        )
 
         # run decoder again with corrections
         if beam_size == 0:
@@ -383,6 +386,7 @@ class Model(nn.Module):
 
         return stacked_output, stacked_attention_scores, \
                corrected_stacked_output, corrected_stacked_attention_scores, \
+               corr_src_att_probs.cpu().numpy(), \
                corrections.cpu().numpy(), rewards.cpu().numpy()
 
     def __repr__(self):

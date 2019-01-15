@@ -43,6 +43,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         corr_all_outputs = []
         valid_attention_scores = []
         corr_valid_attention_scores = []
+        corr_valid_src_attention_scores = []
         all_corrections = []
         all_rewards = []
         all_reward_targets = []
@@ -69,7 +70,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # run as during inference to produce translations
             # keep track of outputs before and after correction
             output, attention_scores, corr_output, corr_attention_scores, \
-                corrections, rewards = model.run_batch(
+                corr_src_attention_scores, corrections, rewards = \
+                model.run_batch(
                         batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
                         max_output_length=max_output_length)
 
@@ -99,6 +101,9 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             corr_valid_attention_scores.extend(
                 corr_attention_scores[sort_reverse_index]
                 if corr_attention_scores is not None else [])
+            corr_valid_src_attention_scores.extend(
+                corr_src_attention_scores[sort_reverse_index]
+                if corr_src_attention_scores is not None else [])
             all_corrections.extend(corrections[sort_reverse_index]
                                    if corrections is not None else [])
             all_rewards.extend(rewards_cut[sort_reverse_index]
@@ -199,6 +204,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
            valid_hypotheses, corr_valid_hypotheses,\
            decoded_valid, corr_decoded_valid, \
            valid_attention_scores, corr_valid_attention_scores, \
+           corr_valid_src_attention_scores, \
            np.array(all_corrections), all_rewards, \
            all_reward_targets
 
@@ -273,6 +279,7 @@ def test(cfg_file,
             hypotheses, corr_hypotheses, \
             hypotheses_raw, corr_hypotheses_raw, \
             attention_scores, corr_attention_scores, \
+            corr_src_attention_scores, \
             corrections, rewards, reward_targets = validate_on_data(
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
@@ -304,11 +311,23 @@ def test(cfg_file,
                                   output_prefix=attention_path)
 
         if corr_attention_scores is not None and save_attention:
-            attention_path = "{}/{}.{}.att.corr".format(dir, data_set_name,
+            attention_path = "{}/{}.{}.corr.att".format(dir, data_set_name,
                                                         step)
-            print("Attention plots saved to: {}.xx".format(attention_path))
+            print("Corrected attention plots saved to: {}.xx".format(
+                attention_path))
             store_attention_plots(attentions=corr_attention_scores,
                                   targets=corr_hypotheses_raw,
+                                  sources=[s for s in data_set.src],
+                                  idx=range(len(corr_hypotheses)),
+                                  output_prefix=attention_path)
+
+        if corr_src_attention_scores is not None and save_attention:
+            attention_path = "{}/{}.{}.src.corr.att".format(dir, data_set_name,
+                                                        step)
+            print("Correction src attention plots saved to: {}.xx".format(
+                attention_path))
+            store_attention_plots(attentions=corr_src_attention_scores,
+                                  targets=hypotheses_raw,
                                   sources=[s for s in data_set.src],
                                   idx=range(len(corr_hypotheses)),
                                   output_prefix=attention_path)
@@ -320,7 +339,8 @@ def test(cfg_file,
                                   targets=hypotheses_raw,
                                   corr_targets=hypotheses_raw,
                                   idx=range(len(corr_hypotheses)),
-                                  output_prefix=correction_path)
+                                  output_prefix=correction_path,
+                                  rewards=rewards)
 
         if output_path is not None:
             output_path_set = "{}.{}".format(output_path, data_set_name)
