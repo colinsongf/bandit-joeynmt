@@ -7,14 +7,14 @@ from joeynmt.constants import PAD_TOKEN
 from joeynmt.helpers import load_data, arrays_to_sentences, bpe_postprocess, \
     load_config, get_latest_checkpoint, make_data_iter, \
     load_model_from_checkpoint, store_attention_plots, store_correction_plots
-from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy, \
-    token_edit_reward
+from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
 from joeynmt.model import build_model
 from joeynmt.batch import Batch
 
 
 def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
-                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1):
+                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1,
+                     marking_fun=None):
     """
     Generate translations for the given data.
     If `criterion` is not None and references are given, also compute the loss.
@@ -83,11 +83,15 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # ref may be longer than output
 
             reward_targets = np.expand_dims(
-                token_edit_reward(
-                    gold=batch.trg.cpu().numpy()[:, :max_output_length],
-                    pred=output[:, :ref_max_length],
-                    shifted=model.corrector.shift_rewards),
-                2)
+                marking_fun(
+                    output[:, :ref_max_length],
+                    batch.trg.cpu().numpy()[:, :max_output_length]), 2)
+               # token_lcs_reward(
+                #token_edit_reward(
+                #    gold=batch.trg.cpu().numpy()[:, :max_output_length],
+                #    pred=output[:, :ref_max_length]),
+                    #shifted=model.corrector.shift_rewards),
+                #2)
                # np.equal(batch.trg.cpu().numpy()[:, :max_output_length],
                #          output[:, :ref_max_length]).astype(int), 2)
             assert reward_targets.shape == rewards_cut.shape
@@ -284,7 +288,8 @@ def test(cfg_file,
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
                 use_cuda=use_cuda, criterion=None, beam_size=beam_size,
-                beam_alpha=beam_alpha)
+                beam_alpha=beam_alpha, marking_fun=model.marking_fun
+        )
 
         if "trg" in data_set.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \

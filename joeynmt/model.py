@@ -12,7 +12,6 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
 from joeynmt.helpers import arrays_to_sentences
-from joeynmt.metrics import token_edit_reward
 
 
 def build_model(cfg: dict = None,
@@ -237,13 +236,15 @@ class Model(nn.Module):
         # return batch loss = sum over all elements in batch that are not pad
         return batch_loss
 
-    def get_corr_loss_for_batch(self, batch, criterion, logging_fun=None):
+    def get_corr_loss_for_batch(self, batch, criterion,
+                                logging_fun=None, marking_fun=None):
         """
         Compute non-normalized loss for batch for corrector
 
         :param batch:
         :param criterion:
         :param logging_fun:
+        :param marking_fun: marking function for inducing token-feedback
         :return:
         """
         original_pred, corrections, rewards, corr_outputs, corr_hidden, \
@@ -255,9 +256,12 @@ class Model(nn.Module):
         # the targets for this model are computed dynamically
 
         reward_targets = np.expand_dims(
-            token_edit_reward(
-                batch.trg.cpu().numpy(), original_pred.astype(int),
-                shifted=self.corrector.shift_rewards), 2)
+            marking_fun(original_pred.astype(int), batch.trg.cpu().numpy()), 2)
+        #    token_lcs_reward(
+          #  token_edit_reward(
+        #        batch.trg.cpu().numpy(), original_pred.astype(int)),
+               # shifted=self.corrector.shift_rewards),
+        #    2)
 
         assert reward_targets.shape == rewards.shape  # batch x time x 1
 

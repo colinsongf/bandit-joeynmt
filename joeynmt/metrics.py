@@ -142,3 +142,37 @@ def token_edit_reward(gold, pred, shifted=False):
             else:
                 continue
     return rewards
+
+
+def token_lcs_reward(gold, pred):
+    # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
+    # idea from http://www.aclweb.org/anthology/P18-2052
+    def longest_common_substring_rewards(pred, gold):
+        m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
+        longest, x_longest = 0, 0
+        rewards = np.zeros(len(pred))
+        for x in range(1, 1 + len(pred)):
+            for y in range(1, 1 + len(gold)):
+                if pred[x - 1] == gold[y - 1]:
+                    m[x][y] = m[x - 1][y - 1] + 1
+                    if m[x][y] > longest:
+                        longest = m[x][y]
+                        x_longest = x
+                else:
+                    m[x][y] = 0
+        rewards[x_longest - longest: x_longest] = 1
+        #return pred[x_longest - longest: x_longest]
+        return rewards
+    all_rewards = np.zeros_like(pred, dtype=float)
+    for j, (g, p) in enumerate(zip(gold, pred)):  # iterate over batch
+        r = longest_common_substring_rewards(p, g)
+        all_rewards[j] += r
+    return all_rewards
+
+def token_recall_reward(gold, pred):
+    rewards = np.zeros_like(pred, dtype=float)
+    for j, (g, p) in enumerate(zip(gold, pred)):  # iterate over batch
+        for k, p_i in enumerate(p):  # iterate over time
+            if p_i in g:
+                rewards[j,k] = 1
+    return rewards

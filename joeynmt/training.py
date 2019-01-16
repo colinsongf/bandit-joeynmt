@@ -19,7 +19,8 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter, \
     load_model_from_checkpoint, store_correction_plots
 from joeynmt.prediction import validate_on_data
-from joeynmt.metrics import token_accuracy, bleu, f1_bin
+from joeynmt.metrics import token_accuracy, bleu, f1_bin, \
+    token_edit_reward, token_recall_reward, token_lcs_reward
 
 
 class TrainManager:
@@ -176,6 +177,20 @@ class TrainManager:
         self.logging_freq = train_config.get("logging_freq", 100)
         self.validation_freq = train_config.get("validation_freq", 1000)
         self.eval_metric = train_config.get("eval_metric", "bleu")
+        simulated_marking_function = train_config.get(
+            "simulated_marking_function")
+        if simulated_marking_function == "accuracy":
+            self.marking_fun = lambda hyp, ref: token_edit_reward(
+                gold=ref, pred=hyp, shifted=self.model.corrector.shift_rewards)
+        elif simulated_marking_function == "recall":
+            self.marking_fun = lambda hyp, ref: token_recall_reward(gold=ref,
+                                                                    pred=hyp)
+        elif simulated_marking_function == "lcs":
+            self.marking_fun = lambda hyp, ref: token_lcs_reward(gold=ref,
+                                                                 pred=hyp)
+        else:
+            self.marking_fun = None
+
         self.print_valid_sents = train_config["print_valid_sents"]
         self.level = config["data"]["level"]
         self.clip_grad_fun = None
@@ -367,7 +382,9 @@ class TrainManager:
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
-                            criterion=self.criterion)
+                            criterion=self.criterion,
+                            marking_fun=self.marking_fun
+                    )
 
                     # TODO decide whether to write checkpoint: use corr?
                     if self.ckpt_metric == "loss":
@@ -641,7 +658,9 @@ class TrainManager:
         corrector_loss = self.model.get_corr_loss_for_batch(
             batch=batch, criterion=self.criterion,
             logging_fun=
-            self.logger.debug if not self.steps % self.logging_freq else None)
+            self.logger.debug if not self.steps % self.logging_freq else None,
+            marking_fun=self.marking_fun
+        )
 
         # normalize per batch/token
         norm_corrector_loss = corrector_loss / normalizer
@@ -747,7 +766,7 @@ class TrainManager:
                 self.stop = True
 
         report_str = "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\tMT-{}: {:.5f}\t" \
-                     "MT-sBLEU: {:.5f})".format(
+                     "MT-sBLEU: {:.5f}".format(
                             self.steps, valid_loss, valid_ppl, eval_metric,
                             valid_score, valid_sent_score)
 
@@ -857,7 +876,8 @@ def train(cfg_file):
                 eval_metric=trainer.eval_metric, level=trainer.level,
                 max_output_length=trainer.max_output_length,
                 model=model, use_cuda=trainer.use_cuda, criterion=None,
-                beam_size=beam_size, beam_alpha=beam_alpha)
+                beam_size=beam_size, beam_alpha=beam_alpha,
+                marking_fun=model.marking_fun)
         
         if "trg" in test_data.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \
