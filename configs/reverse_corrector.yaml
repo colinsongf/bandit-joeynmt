@@ -46,6 +46,7 @@ training:
     max_output_length: 30
     print_valid_sents: 3
     #load_model: "reverse_bahdanau_correct/100.ckpt"
+    simulated_marking_function: recall # recall, lcs, accuracy
 
 model:
     initializer: "xavier"
