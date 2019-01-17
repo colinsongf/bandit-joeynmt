@@ -280,16 +280,22 @@ class Model(nn.Module):
         # weights are inverse-proportional to label frequency
         # if many 1s -> 0s should get higher weight and vice versa
         # TODO if only 1s -> 0s get all the weight -> not ideal
-        weights = [ratio_ones, 1-ratio_ones]  # number of 1s
+        weights = np.array([ratio_ones, 1-ratio_ones])  # number of 1s
         #print(weights)
         if logging_fun is not None:
             logging_fun("Reward weights: {}".format(weights))
             logging_fun("Reward bias: {}".format(
             self.corrector.reward_output_layer.bias.data))
+
+        targets = torch.from_numpy(reward_targets).long()
+        weights = torch.from_numpy(weights).float()
+        if rewards.is_cuda:
+            targets.cuda()
+            weights.cuda()
         reward_loss = torch.nn.functional.cross_entropy(
             input=rewards.contiguous().view(-1, rewards.size(-1)),
-            target=torch.Tensor(reward_targets, device=rewards.device).contiguous().view(-1).long(),
-            weight=torch.Tensor(weights, device=rewards.device).contiguous().view(-1),
+            target=targets.contiguous().view(-1),
+            weight=weights.contiguous().view(-1),
             reduction='sum')
 
         # loss for correction: log-likelihood of reference under corrected model
