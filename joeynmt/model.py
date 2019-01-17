@@ -91,7 +91,8 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
 
-    def forward(self, src, trg_input, src_mask, src_lengths, correct=False):
+    def forward(self, src, trg_input, src_mask, src_lengths, correct=False,
+                ref=None):
         """
         Take in and process masked src and target sequences.
         Use the encoder hidden state to initialize the decoder
@@ -115,12 +116,19 @@ class Model(nn.Module):
 
         if correct:
             outputs, hidden, att_probs, att_vectors = decoder_output
+            greedy_pred = torch.argmax(outputs, dim=-1).cpu().numpy()  # batch x length
+
+            if ref is not None:
+                # compute gold rewards during training
+                gold_rewards = outputs.new(np.expand_dims(
+                    self.marking_fun(greedy_pred, ref.cpu().numpy()), 2))
+            else:
+                gold_rewards = None
             # corrector predicts perturbation of hidden state that needs correction
             # input: attention vector of forwards RNN, hidden state of backwards RNN
             # R_corr: c_t = RNN([fw, bw, o_t-1], c_t-1), o_t = tanh(Linear(c_t))
             # loss: -log(P(r|NMT,o_t))
             # TODO decoder predictions: what if beam search? (for training always greedy)
-            greedy_pred = torch.argmax(outputs, dim=-1).cpu().numpy()  # batch x length
 
             rev_predicted, rev_pred_mask, pred_length = \
                 self._revert_prepare_seq(seq=greedy_pred, aux_tensor=outputs)
@@ -129,7 +137,8 @@ class Model(nn.Module):
             corrections, rewards, corr_src_att_probs = self.correct(
                 y=rev_predicted, y_length=pred_length,
                 mask=rev_pred_mask, y_states=att_vectors,
-                encoder_output=encoder_output, src_mask=src_mask)
+                encoder_output=encoder_output, src_mask=src_mask,
+                gold_rewards=gold_rewards)
 
             pred_rewards = rewards.argmax(-1).float().unsqueeze(-1)
 
@@ -170,7 +179,8 @@ class Model(nn.Module):
         seq_length = rev_seq_mask.sum(1)
         return rev_seq, rev_seq_mask, seq_length
 
-    def correct(self, y, y_length, mask, y_states, encoder_output, src_mask):
+    def correct(self, y, y_length, mask, y_states, encoder_output, src_mask,
+                gold_rewards=None):
         """
         Run the corrector to predict corrections for hidden states
         :param y:
@@ -180,7 +190,8 @@ class Model(nn.Module):
         :return:
         """
         return self.corrector(self.trg_embed(y), y_length, mask,
-                              y_states, encoder_output.detach(), src_mask)
+                              y_states, encoder_output.detach(), src_mask,
+                              gold_rewards=gold_rewards)
 
     def encode(self, src, src_length, src_mask):
         """
@@ -239,7 +250,7 @@ class Model(nn.Module):
         return batch_loss
 
     def get_corr_loss_for_batch(self, batch, criterion,
-                                logging_fun=None, marking_fun=None):
+                                logging_fun=None, marking_fun=None, train=True):
         """
         Compute non-normalized loss for batch for corrector
 
@@ -252,7 +263,8 @@ class Model(nn.Module):
         original_pred, corrections, rewards, corr_outputs, corr_hidden, \
         corr_att_probs, src_corr_att_probs = self.forward(
             src=batch.src, trg_input=batch.trg_input, correct=True,
-            src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+            src_mask=batch.src_mask, src_lengths=batch.src_lengths,
+            ref=batch.trg if train else None)
 
         # reward model is trained to predict whether mt predictions are correct
         # the targets for this model are computed dynamically
@@ -386,7 +398,8 @@ class Model(nn.Module):
                                   device=rev_pred_mask.device,
                                   dtype=torch.float32),
             encoder_output=encoder_output,
-            src_mask=batch.src_mask
+            src_mask=batch.src_mask,
+            gold_rewards=None
         )
         pred_rewards = rewards.argmax(-1).float().unsqueeze(-1)
 

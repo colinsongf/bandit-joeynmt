@@ -127,7 +127,7 @@ class RecurrentCorrector(Corrector):
         return rnn_outputs
 
     def forward(self, reversed_input, y_length, mask, y_states,
-                encoder_output, src_mask):
+                encoder_output, src_mask, gold_rewards=None):
         """
         Reads the decoder output backwards,
         combines it with decoder hidden states
@@ -208,7 +208,14 @@ class RecurrentCorrector(Corrector):
             # batch x 1 x 2*enc_size+hidden_size
             prev_att_vector = torch.tanh(self.att_vector_layer(att_vector_input))
             # TODO could also feed correct reward as history
-            corr_prev_pred = torch.mul(corr_prev_pred, 1-reward_pred)
+            # during training use gold reward
+            if gold_rewards is not None:
+                curr_reward = gold_rewards[:, t].unsqueeze(-1)
+            # during validation use predicted reward
+            else:
+                curr_reward = reward_pred
+
+            corr_prev_pred = torch.mul(corr_prev_pred, 1-curr_reward)
             corr_outputs.append(corr_prev_pred.squeeze(1))
             reward_outputs.append(reward_output.squeeze(1))
             attention_probs.append(att_probs.squeeze(1))

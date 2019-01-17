@@ -190,6 +190,7 @@ class TrainManager:
                                                                  pred=hyp)
         else:
             self.marking_fun = None
+        self.model.marking_fun = self.marking_fun
 
         self.print_valid_sents = train_config["print_valid_sents"]
         self.level = config["data"]["level"]
@@ -659,7 +660,7 @@ class TrainManager:
             batch=batch, criterion=self.criterion,
             logging_fun=
             self.logger.debug if not self.steps % self.logging_freq else None,
-            marking_fun=self.marking_fun
+            marking_fun=self.marking_fun, train=True
         )
 
         # normalize per batch/token

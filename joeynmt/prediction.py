@@ -63,7 +63,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                     batch, criterion=criterion)
                 corrector_loss = model.get_corr_loss_for_batch(
                     batch=batch, criterion=criterion,
-                    marking_fun=marking_fun)
+                    marking_fun=marking_fun, train=False)
 
                 total_loss += batch_xent_loss+corrector_loss
                 total_ntokens += batch.ntokens
