@@ -132,6 +132,9 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
                         p.data *= math.sqrt(dim)
 
             elif "bias" in name:
+                if "reward" in name:
+                    # initialize bias of reward corrector to 1
+                    nn.init.ones_(p)
                 bias_init_fn_(p)
 
             elif len(p.size()) > 1:

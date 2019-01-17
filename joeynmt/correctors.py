@@ -71,7 +71,7 @@ class RecurrentCorrector(Corrector):
 
         # predict a reward
         # TODO binary?
-        self.reward_output_layer = nn.Linear(hidden_size, 1)
+        self.reward_output_layer = nn.Linear(hidden_size, 2)
 
         if corr_activation == "tanh":
             self.corr_activation = torch.tanh
@@ -182,8 +182,11 @@ class RecurrentCorrector(Corrector):
             rnn_output, hidden = self.output_rnn(input_i, hx=hidden)
             corr_prev_pred = self.corr_activation(
                 self.corr_output_layer(rnn_output))
-            reward_prev_pred = self.reward_activation(
-                self.reward_output_layer(rnn_output))
+            #reward_prev_pred = self.reward_activation(
+            #    self.reward_output_layer(rnn_output))
+            reward_output = self.reward_output_layer(rnn_output)
+
+            reward_pred = reward_output.argmax(-1).float().unsqueeze(-1)
 
             # use new (top) decoder layer as attention query
             if isinstance(hidden, tuple):
@@ -205,9 +208,9 @@ class RecurrentCorrector(Corrector):
             # batch x 1 x 2*enc_size+hidden_size
             prev_att_vector = torch.tanh(self.att_vector_layer(att_vector_input))
             # TODO could also feed correct reward as history
-            corr_prev_pred = torch.mul(corr_prev_pred, (1-reward_prev_pred))
+            corr_prev_pred = torch.mul(corr_prev_pred, 1-reward_pred)
             corr_outputs.append(corr_prev_pred.squeeze(1))
-            reward_outputs.append(reward_prev_pred.squeeze(1))
+            reward_outputs.append(reward_output.squeeze(1))
             attention_probs.append(att_probs.squeeze(1))
         corr_outputs = torch.stack(corr_outputs, dim=1)
         reward_outputs = torch.stack(reward_outputs, dim=1)

@@ -131,6 +131,8 @@ class Model(nn.Module):
                 mask=rev_pred_mask, y_states=att_vectors,
                 encoder_output=encoder_output, src_mask=src_mask)
 
+            pred_rewards = rewards.argmax(-1).float().unsqueeze(-1)
+
             # run decoder again with corrections*(1-rewards)
             # if reward is 1 -> no correction
             corr_outputs, corr_hidden, corr_att_probs, corr_att_vectors =\
@@ -138,7 +140,7 @@ class Model(nn.Module):
                         encoder_hidden=encoder_hidden,
                         src_mask=src_mask, trg_input=trg_input,
                         unrol_steps=unrol_steps,
-                        corrections=corrections*(1-rewards))
+                        corrections=corrections*(1-pred_rewards))
             return greedy_pred, corrections, rewards, \
                 corr_outputs, corr_hidden, corr_att_probs, corr_src_att_probs
 
@@ -262,14 +264,33 @@ class Model(nn.Module):
         #        batch.trg.cpu().numpy(), original_pred.astype(int)),
                # shifted=self.corrector.shift_rewards),
         #    2)
-
-        assert reward_targets.shape == rewards.shape  # batch x time x 1
+        assert reward_targets.shape[:-1] == rewards.shape[:-1]  # batch x time x 1
 
         # loss is MSE between targets and predictions
-        reward_loss = torch.mean(
-            (rewards.new(reward_targets)-rewards)**2)
+       # reward_loss = torch.mean(
+       #     (rewards.new(reward_targets)-rewards)**2)
         #print("reward", reward_loss)
         #print("*coeff", reward_loss*self.corrector.reward_coeff)
+
+        # xent with 2 classes
+        #print([(r, t) for r, t in zip(rewards, reward_targets)])
+        #print(self.corrector.reward_output_layer.bias.data)
+        eps = 0.001
+        ratio_ones = (reward_targets.sum()/reward_targets.size) + eps
+        # weights are inverse-proportional to label frequency
+        # if many 1s -> 0s should get higher weight and vice versa
+        # TODO if only 1s -> 0s get all the weight -> not ideal
+        weights = [ratio_ones, 1-ratio_ones]  # number of 1s
+        #print(weights)
+        if logging_fun is not None:
+            logging_fun("Reward weights: {}".format(weights))
+            logging_fun("Reward bias: {}".format(
+            self.corrector.reward_output_layer.bias.data))
+        reward_loss = torch.nn.functional.cross_entropy(
+            input=rewards.contiguous().view(-1, rewards.size(-1)),
+            target=torch.Tensor(reward_targets, device=rewards.device).contiguous().view(-1).long(),
+            weight=torch.Tensor(weights, device=rewards.device).contiguous().view(-1),
+            reduction='sum')
 
         # loss for correction: log-likelihood of reference under corrected model
         # compute log probs of correction
@@ -281,6 +302,7 @@ class Model(nn.Module):
             target=batch.trg.contiguous().view(-1))
 
         # reward loss gets weighed by a coefficient since it's on a diff. scale
+        #print("corr", corrector_loss, "rew", reward_loss)
         total_loss = corrector_loss+self.corrector.reward_coeff*reward_loss
 
         if logging_fun is not None:
@@ -360,6 +382,7 @@ class Model(nn.Module):
             encoder_output=encoder_output,
             src_mask=batch.src_mask
         )
+        pred_rewards = rewards.argmax(-1).float().unsqueeze(-1)
 
         # run decoder again with corrections
         if beam_size == 0:
@@ -370,7 +393,7 @@ class Model(nn.Module):
                         src_mask=batch.src_mask, embed=self.trg_embed,
                         bos_index=self.bos_index, decoder=self.decoder,
                         max_output_length=max_output_length,
-                        corrections=corrections*(1-rewards))
+                        corrections=corrections*(1-pred_rewards))
             # batch, time, max_src_length
         else:  # beam size
             corrected_stacked_output, corrected_stacked_attention_scores, _ = \
@@ -382,7 +405,7 @@ class Model(nn.Module):
                             pad_index=self.pad_index,
                             bos_index=self.bos_index,
                             decoder=self.decoder,
-                            corrections=corrections*(1-rewards),
+                            corrections=corrections*(1-pred_rewards),
                             src_lengths=batch.src_lengths,
                             return_attention_vectors=False,
                             return_attention=True)
@@ -391,7 +414,7 @@ class Model(nn.Module):
         return stacked_output, stacked_attention_scores, \
                corrected_stacked_output, corrected_stacked_attention_scores, \
                corr_src_att_probs.cpu().numpy(), \
-               corrections.cpu().numpy(), rewards.cpu().numpy()
+               corrections.cpu().numpy(), pred_rewards.cpu().numpy()
 
     def __repr__(self):
         """
