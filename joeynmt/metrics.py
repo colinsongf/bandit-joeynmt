@@ -147,6 +147,7 @@ def token_edit_reward(gold, pred, shifted=False):
 def token_lcs_reward(gold, pred):
     # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
     # idea from http://www.aclweb.org/anthology/P18-2052
+    # TODO adapt if two second longest
     def longest_common_substring_rewards(pred, gold):
         m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
         longest, x_longest = 0, 0

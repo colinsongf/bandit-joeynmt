@@ -27,6 +27,7 @@ class RecurrentDecoder(Decoder):
                  bridge: bool = False,
                  input_feeding: bool = True,
                  freeze: bool = False,
+                 add_input_size: int = 0,
                  **kwargs):
         """
         Create a recurrent decoder.
@@ -60,10 +61,11 @@ class RecurrentDecoder(Decoder):
         self.input_feeding = input_feeding
         if self.input_feeding: # Luong-style
             # combine embedded prev word +attention vector before feeding to rnn
-            self.rnn_input_size = emb_size + hidden_size
+            self.rnn_input_size = emb_size + hidden_size + add_input_size
         else:
             # just feed prev word embedding
-            self.rnn_input_size = emb_size
+            self.rnn_input_size = emb_size + add_input_size
+
 
         # the decoder RNN
         self.rnn = rnn(self.rnn_input_size, hidden_size, num_layers,
@@ -106,8 +108,7 @@ class RecurrentDecoder(Decoder):
                       prev_att_vector: Tensor = None,  # context or att vector
                       encoder_output: Tensor = None,
                       src_mask: Tensor = None,
-                      hidden: Tensor = None,
-                      correction: Tensor = None):
+                      hidden: Tensor = None):
         """
         Perform a single decoder step (1 word)
 
@@ -116,7 +117,7 @@ class RecurrentDecoder(Decoder):
         :param encoder_output:
         :param src_mask:
         :param hidden:
-        :param correction: added to hidden state (query)
+        :param add_input: additional input
         :return:
         """
 
@@ -139,12 +140,8 @@ class RecurrentDecoder(Decoder):
 
         # use new (top) decoder layer as attention query
         if isinstance(hidden, tuple):
-            if correction is not None:
-                hidden[0][-1] += correction
             query = hidden[0][-1].unsqueeze(1)
         else:
-            if correction is not None:
-                hidden[-1] += correction
             query = hidden[-1].unsqueeze(1)  # [#layers, B, D] -> [B, 1, D]
 
         # compute context vector using attention mechanism
@@ -166,7 +163,7 @@ class RecurrentDecoder(Decoder):
 
     def forward(self, trg_embed, encoder_output, encoder_hidden,
                 src_mask, unrol_steps, hidden=None, prev_att_vector=None,
-                corrections=None):
+                add_inputs=None):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
 
@@ -177,7 +174,7 @@ class RecurrentDecoder(Decoder):
         :param unrol_steps:
         :param hidden:
         :param prev_att_vector:
-        :param corrections: added to query (hidden state)
+        :param add_inputs: additional inputs for each time step
         :return:
         """
 
@@ -204,18 +201,18 @@ class RecurrentDecoder(Decoder):
 
         # unroll the decoder RNN for max_len steps
         for i in range(unrol_steps):
-            if corrections is not None:
-                correction = corrections[:, i, :]
-            else:
-                correction = None
             prev_embed = trg_embed[:, i].unsqueeze(1)  # batch, 1, emb
+            # additional input is concatenated with prev_emb to feed as input
+            if add_inputs is not None:
+                add_input = add_inputs[:, i].unsqueeze(1)
+                prev_embed = torch.cat([prev_embed, add_input], dim=2)
+                print("prev_emb", prev_embed.shape)
             prev_att_vector, hidden, att_prob = self._forward_step(
                 prev_embed=prev_embed,
                 prev_att_vector=prev_att_vector,
                 encoder_output=encoder_output,
                 src_mask=src_mask,
-                hidden=hidden,
-                correction=correction)
+                hidden=hidden)
             att_vectors.append(prev_att_vector)
             att_probs.append(att_prob)
 

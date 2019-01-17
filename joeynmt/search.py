@@ -7,7 +7,7 @@ from joeynmt.helpers import tile
 
 
 def greedy(src_mask, embed, bos_index, max_output_length, decoder,
-           encoder_output, encoder_hidden, corrections=None):
+           encoder_output, encoder_hidden, prev_seq=None, prev_states=None):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
 
@@ -18,7 +18,7 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
     :param decoder:
     :param encoder_output:
     :param encoder_hidden:
-    :param corrections:
+    :param prev_seq: prediction of previous decoder
     :return:
     """
     batch_size = src_mask.size(0)
@@ -27,20 +27,34 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
     output = []
     attention_scores = []
     attention_vectors = []
+    rewards = []
     hidden = None
     prev_att_vector = None
+
     for t in range(max_output_length):
-        # decode one single step
-        out, hidden, att_probs, prev_att_vector = decoder(
-            encoder_output=encoder_output,
-            encoder_hidden=encoder_hidden,
-            src_mask=src_mask,
-            trg_embed=embed(prev_y),
-            hidden=hidden,
-            prev_att_vector=prev_att_vector,
-            unrol_steps=1,
-            corrections=corrections
-        )
+        if prev_seq is not None and prev_states is not None:
+            out, hidden, att_probs, prev_att_vector, reward = decoder(
+                encoder_output=encoder_output,
+                encoder_hidden=encoder_hidden,
+                src_mask=src_mask,
+                trg_embed=embed(prev_y),
+                hidden=hidden,
+                prev_att_vector=prev_att_vector,
+                unrol_steps=1,
+                prev_decoder_hidden=prev_states, decoder_seq=prev_seq,
+            )
+        else:
+            # decode one single step
+            out, hidden, att_probs, prev_att_vector = decoder(
+                encoder_output=encoder_output,
+                encoder_hidden=encoder_hidden,
+                src_mask=src_mask,
+                trg_embed=embed(prev_y),
+                hidden=hidden,
+                prev_att_vector=prev_att_vector,
+                unrol_steps=1,
+            )
+            reward = None
         # out: batch x time=1 x vocab (logits)
 
         # greedy decoding: choose arg max over vocabulary in each step
@@ -49,10 +63,15 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
         prev_y = next_word
         attention_scores.append(att_probs.squeeze(1).cpu().numpy())
         attention_vectors.append(prev_att_vector.squeeze(1))
+        if reward is not None:
+            rewards.append(reward.squeeze(1).cpu().numpy())
         # batch, max_src_lengths
     stacked_output = np.stack(output, axis=1)  # batch, time
     stacked_attention_scores = np.stack(attention_scores, axis=1)
     attention_vectors = torch.stack(attention_vectors, dim=1)  # not numpy
+    if len(rewards) > 0:
+        rewards = np.stack(rewards, axis=1)
+        return stacked_output, stacked_attention_scores, attention_vectors, rewards
     return stacked_output, stacked_attention_scores, attention_vectors
 
 
@@ -61,7 +80,7 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
                 max_output_length, alpha, embed,
                 n_best=1, return_attention=False,
                 return_attention_vectors=False,
-                corrections=None):
+                prev_seq=None, prev_states=None):
     """
     Beam search with size k. Follows OpenNMT-py implementation.
     In each decoding step, find the k most likely partial hypotheses.
@@ -95,9 +114,7 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
     src_mask = tile(src_mask, size, dim=0)  # batch*k x 1 x src_len
     src_lengths = tile(src_lengths, size, dim=0)
 
-    if corrections is not None:
-        corrections = tile(corrections, size, dim=0)
-
+    # TODO prev_seq and states and rewards
 
     batch_offset = torch.arange(
         batch_size, dtype=torch.long, device=encoder_output.device)
@@ -165,8 +182,7 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
             trg_embed=embed(decoder_input),
             hidden=hidden,
             prev_att_vector=prev_att_vectors,
-            unrol_steps=1,
-            corrections=corrections)
+            unrol_steps=1)
 
         log_probs = F.log_softmax(out, dim=-1).squeeze(1)  # batch*k x trg_vocab
 
