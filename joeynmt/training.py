@@ -877,7 +877,7 @@ def train(cfg_file):
                 max_output_length=trainer.max_output_length,
                 model=model, use_cuda=trainer.use_cuda, criterion=None,
                 beam_size=beam_size, beam_alpha=beam_alpha,
-                marking_fun=model.marking_fun)
+                marking_fun=trainer.marking_fun)
         
         if "trg" in test_data.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \
