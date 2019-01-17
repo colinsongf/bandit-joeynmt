@@ -142,8 +142,12 @@ class RecurrentCorrector(Corrector):
         :return:
         """
         # TODO make use of length and mask?
+        # TODO could do without flip by modifying iteratior in apply_rnn
         rnn_outputs = self._apply_rnn(input=reversed_input)
         #print("bw rnn output", rnn_outputs.shape)  # batch x time x hidden
+
+        # Flip order back
+        rnn_outputs = torch.flip(rnn_outputs, dims=[1])
 
         # pre-compute projected encoder outputs
         # (the "keys" for the attention mechanism)
