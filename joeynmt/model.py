@@ -302,8 +302,8 @@ class Model(nn.Module):
         targets = torch.from_numpy(reward_targets).long()
         weights = torch.from_numpy(weights).float()
         if rewards.is_cuda:
-            targets.cuda()
-            weights.cuda()
+            targets = targets.cuda()
+            weights = weights.cuda()
         reward_loss = torch.nn.functional.cross_entropy(
             input=rewards.contiguous().view(-1, rewards.size(-1)),
             target=targets.contiguous().view(-1),
