@@ -700,7 +700,7 @@ class TrainManager:
             self.optimizer["corrector"].step()
             self.optimizer["mt"].zero_grad()
             for name, param in self.corrector_params.items():
-                if param.requires_grad:
+                if param.requires_grad and self.loss_weights["corrector"] >0:
                     # set the gradients back to zero
                     param.grad = param.grad.detach()
                     param.grad.zero_()
