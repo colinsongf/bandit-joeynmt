@@ -28,6 +28,9 @@ class RecurrentDiscreteCorrector(RecurrentDecoder):
                  input_feeding: bool = True,
                  freeze: bool = False,
                  prev_hidden_size: int = 0,
+                 bidirectional: bool = True,
+                 reward_coeff: float = 0,
+                 shift_rewards: bool = False,
                  **kwargs):
         """
         Create a recurrent decoder.
@@ -61,9 +64,11 @@ class RecurrentDiscreteCorrector(RecurrentDecoder):
                 bridge=bridge,
                 input_feeding=input_feeding,
                 freeze=freeze,
-                add_input_size=prev_hidden_size+emb_size,
+                add_input_size=prev_hidden_size+hidden_size,
                 **kwargs)
-        print("corr_hidden_size", self.rnn_input_size)
+        # additional input:
+        # - hidden state from previous decoder
+        # - backwards rnn hidden state
 
         # what's the difference? additional rnn to read in produced seq backwards
         # also receives hidden states from first decoder
@@ -74,12 +79,16 @@ class RecurrentDiscreteCorrector(RecurrentDecoder):
         # reads in the produced words
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
-        self.bw_rnn = rnn(emb_size, hidden_size, num_layers,
-                            batch_first=True,
-                            dropout=dropout if num_layers > 1 else 0.)
+        self.bw_rnn = rnn(emb_size, hidden_size//(2 if bidirectional else 1),
+                          num_layers,
+                          batch_first=True, bidirectional=bidirectional,
+                          dropout=dropout if num_layers > 1 else 0.)
         # predict a reward
         # TODO binary?
         self.reward_output_layer = nn.Linear(hidden_size, 1)
+
+        self.shift_rewards = shift_rewards
+        self.reward_coeff = reward_coeff
 
     def _read_rnn(self, input):
         """
@@ -92,11 +101,11 @@ class RecurrentDiscreteCorrector(RecurrentDecoder):
         # run through rnn (backwards)
         hidden = None
         rnn_outputs = []
-        for t in range(x.shape[1]):
+        for t in range(x.shape[1]-1, -1, -1):  # backwards iteration
             x_i = x[:, t, :].unsqueeze(1)
             rnn_output, hidden = self.bw_rnn(x_i, hx=hidden)  # batch x 1 x hidden
             rnn_outputs.append(rnn_output.squeeze(1))
-        rnn_outputs = torch.stack(rnn_outputs, dim=1)
+        rnn_outputs = torch.stack(rnn_outputs, dim=1).flip(1)
         return rnn_outputs
 
     def decoder_bridge(self, prev_states, prev_outputs):
@@ -115,7 +124,7 @@ class RecurrentDiscreteCorrector(RecurrentDecoder):
         return comb_states
 
     def forward(self, trg_embed, encoder_output, encoder_hidden,
-                prev_decoder_hidden, decoder_seq,
+                comb_states,
                 src_mask, unrol_steps, hidden=None, prev_att_vector=None):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
@@ -123,29 +132,14 @@ class RecurrentDiscreteCorrector(RecurrentDecoder):
         :param trg_embed:
         :param encoder_output:
         :param prev_decoder_hidden: decoder hidden states
-        :param decoder_seq: decoder output sequence
+        :param decoder_seq: decoder output sequence (embedded)
         :param encoder_hidden:
         :param src_mask:
         :param unrol_steps:
         :param hidden:
         :param prev_att_vector:
-        :param corrections: added to query (hidden state)
         :return:
         """
-
-        # initialize decoder hidden state from final encoder hidden state
-        if hidden is None:
-            hidden = self.init_hidden(encoder_hidden)
-
-        # pre-compute projected encoder outputs
-        # (the "keys" for the attention mechanism)
-        # this is only done for efficiency
-        if hasattr(self.attention, "compute_proj_keys"):
-            self.attention.compute_proj_keys(encoder_output)
-
-        comb_states = self.decoder_bridge(prev_states=prev_decoder_hidden,
-                                  prev_outputs=decoder_seq)
-        # batch x trg_len x emb+hidden
 
         # run a normal decoder, but with additional input in every time step
         outputs, hidden, att_probs, att_vectors = \

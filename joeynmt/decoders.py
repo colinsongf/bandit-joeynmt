@@ -206,7 +206,6 @@ class RecurrentDecoder(Decoder):
             if add_inputs is not None:
                 add_input = add_inputs[:, i].unsqueeze(1)
                 prev_embed = torch.cat([prev_embed, add_input], dim=2)
-                print("prev_emb", prev_embed.shape)
             prev_att_vector, hidden, att_prob = self._forward_step(
                 prev_embed=prev_embed,
                 prev_att_vector=prev_att_vector,

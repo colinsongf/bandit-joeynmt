@@ -7,7 +7,7 @@ from joeynmt.helpers import tile
 
 
 def greedy(src_mask, embed, bos_index, max_output_length, decoder,
-           encoder_output, encoder_hidden, prev_seq=None, prev_states=None):
+           encoder_output, encoder_hidden, comb_states=None):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
 
@@ -32,7 +32,8 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
     prev_att_vector = None
 
     for t in range(max_output_length):
-        if prev_seq is not None and prev_states is not None:
+        if comb_states is not None:
+            comb_state = comb_states[:,t,:].unsqueeze(1)
             out, hidden, att_probs, prev_att_vector, reward = decoder(
                 encoder_output=encoder_output,
                 encoder_hidden=encoder_hidden,
@@ -41,7 +42,7 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
                 hidden=hidden,
                 prev_att_vector=prev_att_vector,
                 unrol_steps=1,
-                prev_decoder_hidden=prev_states, decoder_seq=prev_seq,
+                comb_states=comb_state
             )
         else:
             # decode one single step
@@ -80,7 +81,7 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
                 max_output_length, alpha, embed,
                 n_best=1, return_attention=False,
                 return_attention_vectors=False,
-                prev_seq=None, prev_states=None):
+                comb_states=None):
     """
     Beam search with size k. Follows OpenNMT-py implementation.
     In each decoding step, find the k most likely partial hypotheses.
@@ -113,8 +114,8 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
                           dim=0)  # batch*k x src_len x enc_hidden_size
     src_mask = tile(src_mask, size, dim=0)  # batch*k x 1 x src_len
     src_lengths = tile(src_lengths, size, dim=0)
-
-    # TODO prev_seq and states and rewards
+    if comb_states is not None:
+        comb_states = tile(comb_states, size, dim=0)
 
     batch_offset = torch.arange(
         batch_size, dtype=torch.long, device=encoder_output.device)
@@ -175,14 +176,33 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
         # expand current hypotheses
         # decode one single step
         # out: logits for final softmax
-        out, hidden, att_scores, prev_att_vectors = decoder(
-            encoder_output=encoder_output,
-            encoder_hidden=encoder_hidden,
-            src_mask=src_mask,
-            trg_embed=embed(decoder_input),
-            hidden=hidden,
-            prev_att_vector=prev_att_vectors,
-            unrol_steps=1)
+        if comb_states is not None:
+            try:
+                comb_state = comb_states[:, step, :].unsqueeze(1)
+            except IndexError:
+                # second decoder is longer than first
+                # TODO solution for now: feed zeros
+                comb_state = comb_states.new_zeros(comb_states.size(0), 1, comb_states.size(-1))
+            out, hidden, att_scores, prev_att_vectors, rewards = decoder(
+                encoder_output=encoder_output,
+                encoder_hidden=encoder_hidden,
+                src_mask=src_mask,
+                trg_embed=embed(decoder_input),
+                hidden=hidden,
+                prev_att_vector=prev_att_vectors,
+                unrol_steps=1,
+                comb_states=comb_state
+            )
+        else:
+            out, hidden, att_scores, prev_att_vectors = decoder(
+                encoder_output=encoder_output,
+                encoder_hidden=encoder_hidden,
+                src_mask=src_mask,
+                trg_embed=embed(decoder_input),
+                hidden=hidden,
+                prev_att_vector=prev_att_vectors,
+                unrol_steps=1
+            )
 
         log_probs = F.log_softmax(out, dim=-1).squeeze(1)  # batch*k x trg_vocab
 
@@ -329,10 +349,10 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
             if prev_att_vectors is not None:
                 # first merge batch and beam dimension, then select, then unmerge again
                 prev_att_vectors = prev_att_vectors.view(att_probs.size(0), att_probs.size(1), prev_att_vectors.size(-1)).index_select(0, non_finished).view(-1, 1, prev_att_vectors.size(-1))
-            # same for the corrections
-            if corrections is not None:
-                corrections = corrections.view(att_probs.size(0), att_probs.size(1), corrections.size(-2), corrections.size(-1)).index_select(0, non_finished).view(-1, corrections.size(-2), corrections.size(-1))
 
+            if comb_states is not None:
+                # first merge batch and beam dimension, then select, then unmerge again -> here 4D
+                comb_states = comb_states.view(att_probs.size(0), att_probs.size(1), comb_states.size(-2), comb_states.size(-1)).index_select(0, non_finished).view(-1, comb_states.size(-2), comb_states.size(-1))
             # reorder indices, outputs and masks
             select_indices = batch_index.view(-1)
             encoder_output = encoder_output.index_select(0, select_indices)

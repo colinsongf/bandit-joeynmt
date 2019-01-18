@@ -13,6 +13,8 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
 from joeynmt.helpers import arrays_to_sentences
+from joeynmt.metrics import token_accuracy, bleu, f1_bin, \
+    token_edit_reward, token_recall_reward, token_lcs_reward
 
 
 def build_model(cfg: dict = None,
@@ -42,6 +44,7 @@ def build_model(cfg: dict = None,
     #corrector = RecurrentCorrector(**cfg["corrector"],
     #                               trg_embed=trg_embed, encoder=encoder,
     #                               decoder_size=decoder.hidden_size)
+
     corrector = RecurrentDiscreteCorrector(**cfg["corrector"],
                                            encoder=encoder,
                                            vocab_size=len(trg_vocab),
@@ -51,6 +54,19 @@ def build_model(cfg: dict = None,
     model = Model(encoder=encoder, decoder=decoder, corrector=corrector,
                   src_embed=src_embed, trg_embed=trg_embed,
                   src_vocab=src_vocab, trg_vocab=trg_vocab)
+    simulated_marking_function = cfg.get(
+        "simulated_marking_function")
+    if simulated_marking_function == "accuracy":
+        model.marking_fun = lambda hyp, ref: token_edit_reward(
+            gold=ref, pred=hyp, shifted=model.corrector.shift_rewards)
+    elif simulated_marking_function == "recall":
+        model.marking_fun = lambda hyp, ref: token_recall_reward(gold=ref,
+                                                                pred=hyp)
+    elif simulated_marking_function == "lcs":
+        model.marking_fun = lambda hyp, ref: token_lcs_reward(gold=ref,
+                                                             pred=hyp)
+    else:
+        model.marking_fun = None
 
     # custom initialization of model parameters
     initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
@@ -126,16 +142,20 @@ class Model(nn.Module):
             # R_corr: c_t = RNN([fw, bw, o_t-1], c_t-1), o_t = tanh(Linear(c_t))
             # loss: -log(P(r|NMT,o_t))
             # TODO decoder predictions: what if beam search? (for training always greedy)
-            greedy_pred = torch.argmax(outputs, dim=-1).cpu().numpy()  # batch x length
+            greedy_pred = torch.argmax(outputs, dim=-1) #.cpu().numpy()  # batch x length
 
-            rev_predicted, rev_pred_mask, pred_length = \
-                self._revert_prepare_seq(seq=greedy_pred, aux_tensor=outputs)
+            #rev_predicted, rev_pred_mask, pred_length = \
+             #   self._revert_prepare_seq(seq=greedy_pred, aux_tensor=outputs)
 
             # predict corrections
             #corrections, rewards, corr_src_att_probs = self.correct(
             #    y=rev_predicted, y_length=pred_length,
             #    mask=rev_pred_mask, y_states=att_vectors,
             #    encoder_output=encoder_output, src_mask=src_mask)
+            comb_states = self.corrector.decoder_bridge(
+                prev_states=att_vectors.detach(),
+                prev_outputs=self.trg_embed(greedy_pred.detach()))
+            # batch x trg_len x emb+hidden
 
             # run decoder again with corrections*(1-rewards)
             # if reward is 1 -> no correction
@@ -144,12 +164,11 @@ class Model(nn.Module):
                          src_mask=src_mask,
                          trg_input=trg_input,
                          unrol_steps=unrol_steps,
-                         decoder_seq=rev_predicted,
-                         prev_decoder_hidden=att_vectors)
+                         comb_states=comb_states)
             corr_outputs, corr_hidden, corr_src_att_probs, \
             corr_att_vectors, rewards = corrector_output
 
-            return greedy_pred, rewards, corr_outputs, corr_hidden, \
+            return outputs, greedy_pred, rewards, corr_outputs, corr_hidden, \
                    corr_src_att_probs
 
         return decoder_output
@@ -179,7 +198,7 @@ class Model(nn.Module):
         return rev_seq, rev_seq_mask, seq_length
 
     def correct(self, encoder_output, encoder_hidden, src_mask, trg_input,
-                unrol_steps, decoder_seq, prev_decoder_hidden,
+                unrol_steps, comb_states,
                 decoder_hidden=None):
         """
         Run the corrector to predict corrections for hidden states
@@ -197,8 +216,7 @@ class Model(nn.Module):
                             src_mask=src_mask,
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden,
-                            prev_decoder_hidden=prev_decoder_hidden,
-                            decoder_seq=self.trg_embed(decoder_seq),
+                            comb_states=comb_states,
                             )
 
     def encode(self, src, src_length, src_mask):
@@ -234,32 +252,10 @@ class Model(nn.Module):
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
 
-    def get_xent_loss_for_batch(self, batch, criterion):
+    def get_loss_for_batch(self, batch, criterion,
+                           logging_fun=None, marking_fun=None):
         """
-        Compute non-normalized loss for MT part of model
-
-        :param batch:
-        :param criterion:
-        :return:
-        """
-        out, hidden, att_probs, _ = self.forward(
-            src=batch.src, trg_input=batch.trg_input,
-            src_mask=batch.src_mask, src_lengths=batch.src_lengths)
-
-        # compute log probs
-        log_probs = F.log_softmax(out, dim=-1)
-
-        # compute batch loss
-        batch_loss = criterion(
-            input=log_probs.contiguous().view(-1, log_probs.size(-1)),
-            target=batch.trg.contiguous().view(-1))
-        # return batch loss = sum over all elements in batch that are not pad
-        return batch_loss
-
-    def get_corr_loss_for_batch(self, batch, criterion,
-                                logging_fun=None, marking_fun=None):
-        """
-        Compute non-normalized loss for batch for corrector
+        Compute non-normalized loss for batch for corrector and mt
 
         :param batch:
         :param criterion:
@@ -267,15 +263,16 @@ class Model(nn.Module):
         :param marking_fun: marking function for inducing token-feedback
         :return:
         """
-        original_pred, rewards, corr_outputs, corr_hidden, src_corr_att_probs =\
-            self.forward(src=batch.src, trg_input=batch.trg_input, correct=True,
-            src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+        mt_outputs, original_pred, rewards, corr_outputs, corr_hidden, \
+            src_corr_att_probs = self.forward(
+                src=batch.src, trg_input=batch.trg_input, correct=True,
+                src_mask=batch.src_mask, src_lengths=batch.src_lengths)
 
         # reward model is trained to predict whether mt predictions are correct
         # the targets for this model are computed dynamically
 
         reward_targets = np.expand_dims(
-            marking_fun(original_pred.astype(int), batch.trg.cpu().numpy()), 2)
+            marking_fun(original_pred.cpu().numpy(), batch.trg.cpu().numpy()), 2)
         #    token_lcs_reward(
           #  token_edit_reward(
         #        batch.trg.cpu().numpy(), original_pred.astype(int)),
@@ -284,23 +281,35 @@ class Model(nn.Module):
 
         assert reward_targets.shape == rewards.shape  # batch x time x 1
 
+        # loss for MT
+        # compute log probs
+        mt_log_probs = F.log_softmax(mt_outputs, dim=-1)
+
+        # compute batch loss
+        mt_loss = criterion(
+            input=mt_log_probs.contiguous().view(-1, mt_log_probs.size(-1)),
+            target=batch.trg.contiguous().view(-1))
+
         # loss is MSE between targets and predictions
         reward_loss = torch.mean(
             (rewards.new(reward_targets)-rewards)**2)
-        #print("reward", reward_loss)
-        #print("*coeff", reward_loss*self.corrector.reward_coeff)
 
         # loss for correction: log-likelihood of reference under corrected model
         # compute log probs of correction
-        log_probs = F.log_softmax(corr_outputs, dim=-1)
+        corr_log_probs = F.log_softmax(corr_outputs, dim=-1)
 
         # compute batch loss for corrector
         corrector_loss = criterion(
-            input=log_probs.contiguous().view(-1, log_probs.size(-1)),
+            input=corr_log_probs.contiguous().view(-1, corr_log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))
 
+        #print("mt loss", mt_loss)
+        #print("corr loss", corrector_loss)
+        #print("reward", reward_loss)
+        #print("*coeff", reward_loss*self.corrector.reward_coeff)
+
         # reward loss gets weighed by a coefficient since it's on a diff. scale
-        total_loss = corrector_loss+self.corrector.reward_coeff*reward_loss
+        corr_loss = corrector_loss+self.corrector.reward_coeff*reward_loss
 
         if logging_fun is not None:
             logging_fun("before corr: {}".format(
@@ -316,11 +325,15 @@ class Model(nn.Module):
             logging_fun("total corrector loss: {}; "
                         "corrector xent: {:.2f} ({:.2f}\%), "
                         "reward MSE: {:.2f} ({:.2f}\%) ".format(
-                            total_loss,
-                            corrector_loss, corrector_loss/total_loss*100,
-                            reward_loss, reward_loss/total_loss*100))
+                            corr_loss,
+                            corrector_loss, corrector_loss/corr_loss*100,
+                            reward_loss, reward_loss/corr_loss*100))
+            logging_fun("mt loss {:.2f}, corr loss {:.2f}".format(mt_loss,
+                                                                  corr_loss))
 
-        return total_loss
+        return mt_loss, corr_loss
+
+
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """
@@ -367,36 +380,44 @@ class Model(nn.Module):
         # pre-compute projected encoder outputs
         # (the "keys" for the attention mechanism)
         # this is only done for efficiency
-        if hasattr(self.attention, "compute_proj_keys"):
-            self.attention.compute_proj_keys(encoder_output)
+        #if hasattr(self.corrector.attention, "compute_proj_keys"):
+        #    self.corrector.attention.compute_proj_keys(encoder_output)
 
+        # move output into torch again
+        torch_stacked_output = encoder_output.new(stacked_output).long()
 
         # bridge two decoders
-        rev_predicted, rev_pred_mask, pred_length = \
-            self._revert_prepare_seq(seq=stacked_output,
-                                     aux_tensor=encoder_output)
-        rnn_outputs = self.corrector._read_rnn(input=rev_predicted)
+        #rev_predicted, rev_pred_mask, pred_length = \
+        #    self._revert_prepare_seq(seq=stacked_output,
+        #                             aux_tensor=encoder_output)
+        #print(rev_predicted.shape)
+        #rnn_outputs = self.corrector._read_rnn(input=self.trg_embed(rev_predicted))
         # print("bw rnn output", rnn_outputs.shape)  # batch x time x hidden
 
         # concat with y_states
-        comb_states = torch.cat([stacked_att_vectors, rnn_outputs],
-                                dim=2)  # batch x time x decoder.hidden_size+hidden
-
-        # TODO fix this
+        #comb_states = torch.cat([stacked_att_vectors, rnn_outputs],
+        #                        dim=2)  # batch x time x decoder.hidden_size+hidden
+        # Problem: comb_states might be shorter than max_length
+        comb_states = self.corrector.decoder_bridge(
+            prev_states=encoder_output.new(stacked_att_vectors).detach(),
+            prev_outputs=self.trg_embed(torch_stacked_output.detach()))
 
         # run corrector
         if beam_size == 0:
-            corrected_stacked_output, corrected_stacked_attention_scores, _ = \
+            corrected_stacked_output, corrected_stacked_attention_scores, _, \
+                rewards = \
                 greedy(
                         encoder_hidden=encoder_hidden,
                         encoder_output=encoder_output,
                         src_mask=batch.src_mask, embed=self.trg_embed,
                         bos_index=self.bos_index, decoder=self.corrector,
                         max_output_length=max_output_length,
-                        add_input=comb_states)
+                        comb_states=comb_states)
             # batch, time, max_src_length
         else:  # beam size
-            corrected_stacked_output, corrected_stacked_attention_scores, _ = \
+            # TODO track and return rewards
+            rewards = None
+            corrected_stacked_output, corrected_stacked_attention_scores, _, = \
                 beam_search(size=beam_size, encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
                             src_mask=batch.src_mask, embed=self.trg_embed,
@@ -408,12 +429,12 @@ class Model(nn.Module):
                             src_lengths=batch.src_lengths,
                             return_attention_vectors=False,
                             return_attention=True,
-                            add_input=comb_states)
+                            comb_states=comb_states)
             #print("Corrected stacked out", corrected_stacked_output)
 
         return stacked_output, stacked_attention_scores, \
                corrected_stacked_output, corrected_stacked_attention_scores, \
-               rewards.cpu().numpy()
+               rewards
 
     def __repr__(self):
         """

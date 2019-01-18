@@ -23,7 +23,7 @@ training:
     random_seed: 42
     optimizer: "adam"
     loss: "crossentropy"
-    learning_rate:  {"mt": 0.001, "corrector": 0.01}
+    learning_rate:  {"mt": 0.001, "corrector": 0.001}
     learning_rate_min: 0.0002
 #    clip_grad_val: 1.0
     weight_decay: 0.0
@@ -39,16 +39,17 @@ training:
     validation_freq: 100
     logging_freq: 20
     eval_metric: "bleu"
-    model_dir: "reverse_bahdanau_correct"
+    model_dir: "reverse_bahdanau_correct" #_load"
     overwrite: True
     shuffle: True
     use_cuda: False
     max_output_length: 30
     print_valid_sents: 3
-    #load_model: "reverse_bahdanau_correct/100.ckpt"
-    simulated_marking_function: recall # recall, lcs, accuracy
+   # load_model: "reverse_bahdanau_correct/1000.ckpt"
+    loss_weights: {"mt": 0., "corrector": 1.0}
 
 model:
+    simulated_marking_function: accuracy # recall, lcs, accuracy
     initializer: "xavier"
     embed_initializer: "normal"
     embed_init_weight: 0.1
@@ -82,9 +83,10 @@ model:
         freeze: False
     corrector:
         type: "lstm"
-        hidden_size: 33
+        hidden_size: 34
         num_layers: 1
+        bidirectional: False
         attention: "bahdanau"
-        reward_coeff: 1000
-        shift_rewards: True
+        reward_coeff: 100
+        shift_rewards: False
         freeze: False

@@ -13,8 +13,7 @@ from joeynmt.batch import Batch
 
 
 def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
-                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1,
-                     marking_fun=None):
+                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1):
     """
     Generate translations for the given data.
     If `criterion` is not None and references are given, also compute the loss.
@@ -43,11 +42,10 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         corr_all_outputs = []
         valid_attention_scores = []
         corr_valid_attention_scores = []
-        corr_valid_src_attention_scores = []
-        all_corrections = []
         all_rewards = []
         all_reward_targets = []
-        total_loss = 0
+        total_mt_loss = 0
+        total_corr_loss = 0
         total_ntokens = 0
         for valid_i, valid_batch in enumerate(iter(valid_iter), 1):
             # run as during training to get validation loss (e.g. xent)
@@ -59,43 +57,45 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # TODO save computation: forward pass is computed twice
             # run as during training with teacher forcing
             if criterion is not None and batch.trg is not None:
-                batch_xent_loss = model.get_xent_loss_for_batch(
-                    batch, criterion=criterion)
-                corrector_loss = model.get_corr_loss_for_batch(
-                    batch=batch, criterion=criterion,
-                    marking_fun=marking_fun)
+                batch_xent_loss, batch_corrector_loss = model.get_loss_for_batch(
+                    batch, criterion=criterion,
+                    marking_fun=model.marking_fun)
 
-                total_loss += batch_xent_loss+corrector_loss
+                total_mt_loss += batch_xent_loss
+                total_corr_loss += batch_corrector_loss
                 total_ntokens += batch.ntokens
 
             # run as during inference to produce translations
             # keep track of outputs before and after correction
+            # stacked_output, stacked_attention_scores, \
             output, attention_scores, corr_output, corr_attention_scores, \
-                corr_src_attention_scores, corrections, rewards = \
+                rewards = \
                 model.run_batch(
                         batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
                         max_output_length=max_output_length)
 
-            # problem: rewards are predicted for max_output_length
-            # but reward_targets are only computed for all targets in reference
-            # we can only evaluate the rewards in comparison to the reference
-            ref_max_length = batch.trg.shape[1]
-            rewards_cut = rewards[:, :ref_max_length]
-            # ref may be longer than output
+            if rewards is not None:
 
-            reward_targets = np.expand_dims(
-                marking_fun(
-                    output[:, :ref_max_length],
-                    batch.trg.cpu().numpy()[:, :max_output_length]), 2)
-               # token_lcs_reward(
-                #token_edit_reward(
-                #    gold=batch.trg.cpu().numpy()[:, :max_output_length],
-                #    pred=output[:, :ref_max_length]),
-                    #shifted=model.corrector.shift_rewards),
-                #2)
-               # np.equal(batch.trg.cpu().numpy()[:, :max_output_length],
-               #          output[:, :ref_max_length]).astype(int), 2)
-            assert reward_targets.shape == rewards_cut.shape
+                # problem: rewards are predicted for max_output_length
+                # but reward_targets are only computed for all targets in reference
+                # we can only evaluate the rewards in comparison to the reference
+                ref_max_length = batch.trg.shape[1]
+                rewards_cut = rewards[:, :ref_max_length]
+                # ref may be longer than output
+
+                reward_targets = np.expand_dims(
+                    model.marking_fun(
+                        output[:, :ref_max_length],
+                        batch.trg.cpu().numpy()[:, :max_output_length]), 2)
+                   # token_lcs_reward(
+                    #token_edit_reward(
+                    #    gold=batch.trg.cpu().numpy()[:, :max_output_length],
+                    #    pred=output[:, :ref_max_length]),
+                        #shifted=model.corrector.shift_rewards),
+                    #2)
+                   # np.equal(batch.trg.cpu().numpy()[:, :max_output_length],
+                   #          output[:, :ref_max_length]).astype(int), 2)
+                assert reward_targets.shape == rewards_cut.shape
 
             # sort outputs back to original order
             corr_all_outputs.extend(corr_output[sort_reverse_index])
@@ -106,25 +106,21 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             corr_valid_attention_scores.extend(
                 corr_attention_scores[sort_reverse_index]
                 if corr_attention_scores is not None else [])
-            corr_valid_src_attention_scores.extend(
-                corr_src_attention_scores[sort_reverse_index]
-                if corr_src_attention_scores is not None else [])
-            all_corrections.extend(corrections[sort_reverse_index]
-                                   if corrections is not None else [])
-            all_rewards.extend(rewards_cut[sort_reverse_index]
-                               if corrections is not None else [])
-            all_reward_targets.extend(reward_targets[sort_reverse_index]
-                                      if corrections is not None else [])
+
+            if rewards is not None:
+                all_rewards.extend(rewards_cut[sort_reverse_index]
+                                   if rewards is not None else [])
+                all_reward_targets.extend(reward_targets[sort_reverse_index]
+                                          if rewards is not None else [])
 
         assert len(all_outputs) == len(data)
 
-        if criterion is not None and total_ntokens > 0:
-            # total validation loss
-            valid_loss = total_loss
-            # exponent of token-level negative log prob
-            valid_ppl = torch.exp(total_loss / total_ntokens)
+        valid_mt_loss = total_mt_loss
+        valid_corr_loss = total_corr_loss
+        # exponent of token-level negative log prob
+        if total_ntokens > 0:
+            valid_ppl = torch.exp(total_mt_loss / total_ntokens)
         else:
-            valid_loss = -1
             valid_ppl = -1
 
         # decode back to symbols
@@ -204,21 +200,19 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
 
     return current_valid_score, current_sent_score, \
            corr_current_valid_score, corr_current_sent_score, \
-           valid_loss, valid_ppl, valid_sources, \
+           valid_mt_loss, valid_corr_loss, valid_ppl, valid_sources, \
            valid_sources_raw, valid_references, \
            valid_hypotheses, corr_valid_hypotheses,\
            decoded_valid, corr_decoded_valid, \
            valid_attention_scores, corr_valid_attention_scores, \
-           corr_valid_src_attention_scores, \
-           np.array(all_corrections), all_rewards, \
+           all_rewards, \
            all_reward_targets
 
 
 def test(cfg_file,
          ckpt: str = None,
          output_path: str = None,
-         save_attention: bool = False,
-         save_correction: bool = False):
+         save_attention: bool = False):
     """
     Main test function. Handles loading a model from checkpoint, generating
     translations and storing them and attention plots.
@@ -227,7 +221,6 @@ def test(cfg_file,
     :param ckpt:
     :param output_path:
     :param save_attention:
-    :param save_correction:
     :return:
     """
 
@@ -280,17 +273,16 @@ def test(cfg_file,
     for data_set_name, data_set in data_to_predict.items():
 
         score, sent_score, corr_score, sent_corr_score, \
-        loss, ppl, sources, sources_raw, references, \
+        mt_loss, corr_loss, ppl, sources, sources_raw, references, \
             hypotheses, corr_hypotheses, \
             hypotheses_raw, corr_hypotheses_raw, \
             attention_scores, corr_attention_scores, \
-            corr_src_attention_scores, \
-            corrections, rewards, reward_targets = validate_on_data(
+            rewards, reward_targets = validate_on_data(
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
                 use_cuda=use_cuda, criterion=None, beam_size=beam_size,
-                beam_alpha=beam_alpha, marking_fun=model.marking_fun
-        )
+                beam_alpha=beam_alpha
+            )
 
         if "trg" in data_set.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \
@@ -299,7 +291,7 @@ def test(cfg_file,
             print("{:4s} {}: {} (sent: {}) [{}]".format(
                 data_set_name, eval_metric, score, sent_score,
                 decoding_description))
-            decoding_description += "with corrections."
+            decoding_description += " with corrections."
             print("{:4s} {}: {} (sent: {}) [{}]".format(
                 data_set_name, eval_metric, corr_score, sent_corr_score,
                 decoding_description))
@@ -326,27 +318,6 @@ def test(cfg_file,
                                   sources=[s for s in data_set.src],
                                   idx=range(len(corr_hypotheses)),
                                   output_prefix=attention_path)
-
-        if corr_src_attention_scores is not None and save_attention:
-            attention_path = "{}/{}.{}.src.corr.att".format(dir, data_set_name,
-                                                        step)
-            print("Correction src attention plots saved to: {}.xx".format(
-                attention_path))
-            store_attention_plots(attentions=corr_src_attention_scores,
-                                  targets=hypotheses_raw,
-                                  sources=[s for s in data_set.src],
-                                  idx=range(len(corr_hypotheses)),
-                                  output_prefix=attention_path)
-
-        if corrections is not None and save_correction:
-            correction_path = "{}/{}.{}.corr".format(dir, data_set_name, step)
-            print("Correction plots saved to: {}.xx".format(correction_path))
-            store_correction_plots(corrections=corrections,
-                                  targets=hypotheses_raw,
-                                  corr_targets=hypotheses_raw,
-                                  idx=range(len(corr_hypotheses)),
-                                  output_prefix=correction_path,
-                                  rewards=rewards)
 
         if output_path is not None:
             output_path_set = "{}.{}".format(output_path, data_set_name)

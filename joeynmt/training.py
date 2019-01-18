@@ -55,7 +55,7 @@ class TrainManager:
             all_params = list(model.named_parameters())
             # sorting is required to keep track of parameter groups for optimizers
             sorted_corr = sorted(
-                {k: v for (k, v) in all_params if "corrector" in k}.items())
+                {k: v for (k, v) in all_params if "decoder" not in k}.items())  # if "corrector" in key
             self.corrector_params = OrderedDict(sorted_corr)
             self.logger.debug(
                 "CORRECTOR PARAMS: {}".format(self.corrector_params.keys()))
@@ -177,23 +177,10 @@ class TrainManager:
         self.logging_freq = train_config.get("logging_freq", 100)
         self.validation_freq = train_config.get("validation_freq", 1000)
         self.eval_metric = train_config.get("eval_metric", "bleu")
-        simulated_marking_function = train_config.get(
-            "simulated_marking_function")
-        if simulated_marking_function == "accuracy":
-            self.marking_fun = lambda hyp, ref: token_edit_reward(
-                gold=ref, pred=hyp, shifted=self.model.corrector.shift_rewards)
-        elif simulated_marking_function == "recall":
-            self.marking_fun = lambda hyp, ref: token_recall_reward(gold=ref,
-                                                                    pred=hyp)
-        elif simulated_marking_function == "lcs":
-            self.marking_fun = lambda hyp, ref: token_lcs_reward(gold=ref,
-                                                                 pred=hyp)
-        else:
-            self.marking_fun = None
-
         self.print_valid_sents = train_config["print_valid_sents"]
         self.level = config["data"]["level"]
         self.clip_grad_fun = None
+        self.loss_weights = train_config.get("loss_weights", {"mt": 1.0, "corrector": 1.0})
         if "clip_grad_val" in train_config.keys():
             clip_value = train_config["clip_grad_val"]
             self.clip_grad_fun = lambda params:\
@@ -351,15 +338,16 @@ class TrainManager:
                 # reactivate training
                 self.model.train()
                 batch = Batch(batch, self.pad_index, use_cuda=self.use_cuda)
-                batch_loss = self._train_batch(batch)
+                mt_loss, corrector_loss = self._train_batch(batch)
 
                 # log learning progress
                 if self.model.training and self.steps % self.logging_freq == 0:
                     elapsed = time.time() - start - total_valid_duration
                     elapsed_tokens = self.total_tokens - processed_tokens
                     self.logger.info(
-                        "Epoch %d Step: %d Loss: %f Tokens per Sec: %f" %
-                        (epoch_no + 1, self.steps, batch_loss,
+                        "Epoch %d Step: %d MT Loss: %f, Corr. Loss: %f, "
+                        "Tokens per Sec: %f" %
+                        (epoch_no + 1, self.steps, mt_loss, corrector_loss,
                          elapsed_tokens / elapsed))
                     start = time.time()
                     total_valid_duration = 0
@@ -370,29 +358,35 @@ class TrainManager:
 
                     valid_score, valid_sent_score,\
                         corr_valid_score, corr_valid_sent_score, \
-                        valid_loss, valid_ppl, valid_sources, \
+                        valid_mt_loss, valid_corr_loss, valid_ppl, \
+                        valid_sources, \
                         valid_sources_raw, valid_references, \
                         valid_hypotheses, corr_valid_hypotheses, \
                         valid_hypotheses_raw, corr_valid_hypotheses_raw,\
                         valid_attention_scores, corr_valid_attention_scores, \
-                        corr_valid_src_attention_scores, \
-                        corrections, rewards, reward_targets = validate_on_data(
+                        rewards, reward_targets = validate_on_data(
                             batch_size=self.batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
-                            criterion=self.criterion,
-                            marking_fun=self.marking_fun
+                            criterion=self.criterion
                     )
 
                     # TODO decide whether to write checkpoint: use corr?
+                    # TODO write checkpoint when one of them is better
                     if self.ckpt_metric == "loss":
-                        ckpt_score = valid_loss
+                        if self.loss_weights["mt"] > 0:
+                            ckpt_score = valid_mt_loss
+                        else:
+                            ckpt_score = valid_corr_loss
                     elif self.ckpt_metric in ["ppl", "perplexity"]:
                         ckpt_score = valid_ppl
                     else:
-                        ckpt_score = valid_score
+                        if self.loss_weights["mt"] > 0:
+                            ckpt_score = valid_score
+                        else:
+                            ckpt_score = corr_valid_score
 
                     new_best = False
                     if self.is_best(ckpt_score):
@@ -407,16 +401,23 @@ class TrainManager:
                     # pass validation score or loss or ppl to scheduler
                     if self.schedule_metric == "loss":
                         # schedule based on loss
-                        schedule_score = valid_loss
+                        if self.loss_weights["mt"] > 0:
+                            schedule_score = valid_mt_loss
+                        else:
+                            schedule_score = valid_corr_loss
                     elif self.schedule_metric in ["ppl", "perplexity"]:
                         # schedule based on perplexity
                         schedule_score = valid_ppl
                     else:
                         # schedule based on evaluation score
-                        schedule_score = valid_score
+                        if self.loss_weights["mt"] > 0:
+                            schedule_score = valid_score
+                        else:
+                            schedule_score = corr_valid_score
                     if self.scheduler is not None:
                         if type(self.scheduler) is dict:
                             # corrector is scheduled after eval metric
+                            # TODO schedule lr after smth else?
                             self.scheduler["corrector"].step(corr_valid_score)
                             # make scheduler step for MT model
                             self.scheduler["mt"].step(schedule_score)
@@ -483,24 +484,15 @@ class TrainManager:
                         ' (sent: {:.5f}), corr {}: {:.5f} (sent: {:.5f}),'
                         ' reward MSE: {:.5f}, correl.: {:.2f}, acc.: {:.2f},'
                         ' f1(1): {:.2f}, f1(0): {:.2f}, f1_prod: {:.2f}'
-                        ' loss: {:.5f}, ppl: {:.5f}, duration: {:.4f}s'.format(
+                        ' MT loss: {:.5f}, ppl: {:.5f}, Corr loss: {:.5f}, duration: {:.4f}s'.format(
                             epoch_no+1, self.steps, self.eval_metric,
                             valid_score, valid_sent_score, self.eval_metric,
                             corr_valid_score,
                             corr_valid_sent_score,
                             reward_mse, reward_corr, bin_reward_acc*100,
                             f1_1*100, f1_0*100, f1_prod*100,
-                            valid_loss, valid_ppl, valid_duration))
+                            valid_mt_loss, valid_ppl, valid_corr_loss, valid_duration))
 
-                    # TODO check if this moment computation is correct
-                    # since corrections contains lists
-                    # it is not flattened
-                    corrections_means = corrections.mean()
-                    corrections_std = np.sqrt(
-                        np.mean((corrections - corrections_means) ** 2))
-                    self.logger.info("Correction moments: "
-                                     "mean={:.5f}, std={:.5f}.".format(
-                        corrections_means, corrections_std))
                     rewards_means = rewards_flat.mean()
                     rewards_std = np.std(rewards_flat)
                     self.logger.info("Reward moments: "
@@ -524,11 +516,11 @@ class TrainManager:
                                 and print_neg_examples >= max_examples:
                             break
 
-                        corr_acc = token_accuracy([corr], [ref],
-                                                  level=self.level)
+                       # corr_acc = token_accuracy([corr], [ref],
+                       #                           level=self.level)
                         corr_sbleu = bleu([corr], [ref])
-                        hyp_acc = token_accuracy([hyp], [ref],
-                                                 level=self.level)
+                        #hyp_acc = token_accuracy([hyp], [ref],
+                        #                         level=self.level)
                         hyp_sbleu = bleu([hyp], [ref])
                         if corr_sbleu > hyp_sbleu:
                             if print_pos_examples >= max_examples:
@@ -553,7 +545,8 @@ class TrainManager:
                     self._add_report(
                         valid_score=valid_score,
                         valid_sent_score=valid_sent_score,
-                        valid_loss=valid_loss,
+                        valid_mt_loss=valid_mt_loss,
+                        valid_corr_loss=valid_corr_loss,
                         valid_ppl=valid_ppl, eval_metric=self.eval_metric,
                         new_best=new_best,
                         corr_valid_score=corr_valid_score,
@@ -562,7 +555,7 @@ class TrainManager:
                         reward_f1_prod=f1_prod*100, reward_corr=reward_corr,
                         reward_mse=reward_mse, reward_acc=bin_reward_acc*100)
 
-                    # TODO early stopping with corrector
+                    # TODO early stopping with corrector if mt not trained
 
                     # store validation set outputs
                     current_valid_output_file = "{}/{}.hyps".format(
@@ -595,22 +588,12 @@ class TrainManager:
                                           output_prefix="{}/corr.att.{}".format(
                                               self.model_dir,
                                               self.steps))
-                    # store src attention for corrector
-                    store_attention_plots(
-                        attentions=corr_valid_src_attention_scores,
-                        targets=valid_hypotheses_raw,
-                        sources=[s for s in valid_data.src],
-                        idx=[0, 1, 2, random_example],
-                        output_prefix="{}/corr.att.src.{}".format(
-                            self.model_dir,
-                            self.steps))
-
                     store_correction_plots(
-                        corrections=corrections, rewards=rewards,
+                        corrections=rewards, rewards=rewards,
                         targets=valid_hypotheses_raw,
                         corr_targets=corr_valid_hypotheses_raw,
                         idx=[0, 1, 2, random_example],
-                        output_prefix="{}/corr.{}".format(
+                        output_prefix="{}/rewards.{}".format(
                             self.model_dir, self.steps))
 
                 if self.stop:
@@ -641,50 +624,58 @@ class TrainManager:
             raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
         # standard xent loss
-        batch_loss = self.model.get_xent_loss_for_batch(
-            batch=batch, criterion=self.criterion)
+        #batch_loss = self.model.get_xent_loss_for_batch(
+        #    batch=batch, criterion=self.criterion)
 
-        norm_batch_loss = batch_loss.sum() / normalizer
+        #norm_batch_loss = batch_loss.sum() / normalizer
 
         # only if decoder and embeddings not frozen
-        if not all(["corrector" in p for p in self.trainable_params]):
-            # compute gradient
-            norm_batch_loss.backward()
+
         # grads for corrector params are zero here
-        #print("grad norms after Xent", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
+        #print("grad norms after xent", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
+        #print(["corrector" in k for k,v in self.model.named_parameters() if v.grad is not None])
+        assert not any(["corrector" in k for k,v in self.model.named_parameters() if v.grad is not None and torch.norm(v.grad) > 0])
 
         # compute corrector loss separately
         # with torch.autograd.grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=False, only_inputs=True, allow_unused=False)
-        corrector_loss = self.model.get_corr_loss_for_batch(
+        xent_loss, corrector_loss = self.model.get_loss_for_batch(
             batch=batch, criterion=self.criterion,
             logging_fun=
             self.logger.debug if not self.steps % self.logging_freq else None,
-            marking_fun=self.marking_fun
+            marking_fun=self.model.marking_fun
         )
 
+        norm_xent_loss = self.loss_weights["mt"]*(xent_loss.sum() / normalizer)
         # normalize per batch/token
-        norm_corrector_loss = corrector_loss / normalizer
+        norm_corrector_loss = self.loss_weights["corrector"]*(corrector_loss.sum()/normalizer)
+
+        if not all(["corrector" in p for p in self.trainable_params]) and self.loss_weights["mt"] > 0.:
+            # compute gradient
+            norm_xent_loss.backward(retain_graph=True)
 
         if self.normalize_corrector:
             # use xent loss of decoder as factor to scale corrector loss
             # TODO could also use subtraction, but no evidence that better yet
-            norm_corrector_loss /= batch_loss.detach()
+            norm_corrector_loss /= norm_xent_loss.detach()
 
         # TODO add RL loss! gain in BLEU
         # TODO maybe penalize even more
 
         # only train corrector if trainable params exist
-        if any(["corrector" in p for p in self.trainable_params]):
+
+        if any(["corrector" in p for p in self.trainable_params]) and self.loss_weights["corrector"] > 0.:
             grads = {}
             for name, param in self.corrector_params.items():
-                # compute the gradient of the loss wrt to each of the params
-                grad = torch.autograd.grad(corrector_loss,
-                                           inputs=param, retain_graph=True)[0]
-                grads[name] = grad
-                assert grad.shape == param.shape
-                param.grad = grad
+                if param.requires_grad:
+                    # compute the gradient of the loss wrt to each of the params
+                    grad = torch.autograd.grad(corrector_loss,
+                                               inputs=param, retain_graph=True)[0]
+                    grads[name] = grad
+                    assert grad.shape == param.shape
+                    param.grad = grad
             #print(torch.autograd.grad(corrector_loss, inputs=inputs))
-            #print("grad norms for corr: ", [(k, torch.norm(v, 2)) for k, v in grads.items()])
+
+       # print("grad norms after corr", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
 
         if not self.steps % self.logging_freq:
             self.logger.debug("Gradient norms (w/o clipping): {}".format(
@@ -708,7 +699,11 @@ class TrainManager:
             self.optimizer["mt"].step()
             self.optimizer["corrector"].step()
             self.optimizer["mt"].zero_grad()
-            # TODO next line throws an error since integration of attention
+            for name, param in self.corrector_params.items():
+                if param.requires_grad:
+                    # set the gradients back to zero
+                    param.grad = param.grad.detach()
+                    param.grad.zero_()
             #self.optimizer["corrector"].zero_grad()
         else:
             self.optimizer.step()
@@ -718,20 +713,21 @@ class TrainManager:
             self.logger.debug("Corrector loss: {}".format(
                               (corrector_loss/normalizer).detach().cpu().numpy()))
             self.logger.debug("Xent loss: {}".format(
-                              norm_batch_loss.detach().cpu().numpy()))
+                              norm_xent_loss.detach().cpu().numpy()))
             self.logger.debug("(corr/xent) loss: {}".format(
                               (norm_corrector_loss).cpu().detach().numpy()/
-                              norm_batch_loss.cpu().detach().numpy()))
+                              norm_xent_loss.cpu().detach().numpy()))
 
         # increment step and token counter
         self.steps += 1
         self.total_tokens += batch.ntokens
-        return norm_batch_loss
+        return norm_xent_loss, norm_corrector_loss
 
     def _add_report(self, valid_score, valid_sent_score,
-                    valid_ppl, valid_loss, eval_metric,
+                    valid_ppl, valid_mt_loss, eval_metric,
                     new_best=False, corr_valid_score=None,
                     corr_valid_sent_score=None,
+                    valid_corr_loss=None,
                     reward_f1_1=None, reward_f1_0=None,
                     reward_f1_prod=None, reward_corr=None,
                     reward_mse=None, reward_acc=None):
@@ -740,7 +736,7 @@ class TrainManager:
 
         :param valid_score:
         :param valid_ppl:
-        :param valid_loss:
+        :param mt_valid_loss:
         :param eval_metric:
         :param new_best:
         :param corr_valid_score:
@@ -767,8 +763,11 @@ class TrainManager:
 
         report_str = "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\tMT-{}: {:.5f}\t" \
                      "MT-sBLEU: {:.5f}".format(
-                            self.steps, valid_loss, valid_ppl, eval_metric,
+                            self.steps, valid_mt_loss, valid_ppl, eval_metric,
                             valid_score, valid_sent_score)
+
+        if valid_corr_loss is not None:
+            report_str += "\tCorr Loss: {:.5f}\t".format(valid_corr_loss)
 
         if corr_valid_score is not None and corr_valid_sent_score is not None:
             report_str += "\tCorr-{}: {:.5f}\tCorr-sBLEU: {:.5f}".format(
@@ -865,19 +864,17 @@ def train(cfg_file):
             beam_alpha = -1
 
         score, sent_score, corr_score, sent_corr_score, \
-        loss, ppl, sources, sources_raw, references, \
+        mt_loss, corr_loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
         attention_scores, corr_attention_scores, \
-        corr_src_attention_scores, corrections, \
         rewards, reward_targets =\
             validate_on_data(
                 data=test_data, batch_size=trainer.batch_size,
                 eval_metric=trainer.eval_metric, level=trainer.level,
                 max_output_length=trainer.max_output_length,
                 model=model, use_cuda=trainer.use_cuda, criterion=None,
-                beam_size=beam_size, beam_alpha=beam_alpha,
-                marking_fun=model.marking_fun)
+                beam_size=beam_size, beam_alpha=beam_alpha)
         
         if "trg" in test_data.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \

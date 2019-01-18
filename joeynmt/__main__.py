@@ -22,17 +22,13 @@ def main():
     ap.add_argument("--save_attention", action="store_true",
                     help="save attention visualizations")
 
-    ap.add_argument("--save_correction", action="store_true",
-                    help="save correction visualizations")
-
     args = ap.parse_args()
 
     if args.mode == "train":
         train(cfg_file=args.config_path)
     elif args.mode == "test":
         test(cfg_file=args.config_path, ckpt=args.ckpt,
-             output_path=args.output_path, save_attention=args.save_attention,
-             save_correction=args.save_correction)
+             output_path=args.output_path, save_attention=args.save_attention)
     else:
         raise ValueError("Unknown mode")
 
