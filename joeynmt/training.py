@@ -418,9 +418,11 @@ class TrainManager:
                         if type(self.scheduler) is dict:
                             # corrector is scheduled after eval metric
                             # TODO schedule lr after smth else?
-                            self.scheduler["corrector"].step(corr_valid_score)
-                            # make scheduler step for MT model
-                            self.scheduler["mt"].step(schedule_score)
+                            if self.loss_weights["corrector"] > 0:
+                                self.scheduler["corrector"].step(corr_valid_score)
+                            if self.loss_weights["mt"] > 0:
+                                # make scheduler step for MT model
+                                self.scheduler["mt"].step(schedule_score)
                         else:
                             self.scheduler.step(schedule_score)
 
@@ -696,14 +698,16 @@ class TrainManager:
         # make gradient step
         if type(self.optimizer) is dict:
             # two optimizers with 2 different learning rates
-            self.optimizer["mt"].step()
-            self.optimizer["corrector"].step()
-            self.optimizer["mt"].zero_grad()
-            for name, param in self.corrector_params.items():
-                if param.requires_grad and self.loss_weights["corrector"] >0:
-                    # set the gradients back to zero
-                    param.grad = param.grad.detach()
-                    param.grad.zero_()
+            if self.loss_weights["mt"] > 0:
+                self.optimizer["mt"].step()
+                self.optimizer["mt"].zero_grad()
+            if self.loss_weights["corrector"] > 0:
+                self.optimizer["corrector"].step()
+                for name, param in self.corrector_params.items():
+                    if param.requires_grad:
+                        # set the gradients back to zero
+                        param.grad = param.grad.detach()
+                        param.grad.zero_()
             #self.optimizer["corrector"].zero_grad()
         else:
             self.optimizer.step()
