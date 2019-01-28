@@ -36,6 +36,7 @@ class TrainManager:
         """
         train_config = config["training"]
         self.model = model
+        self.use_cuda = train_config["use_cuda"]
         self.overwrite = train_config.get("overwrite", False)
         self.model_dir = self._make_model_dir(train_config["model_dir"])
         self.valid_report_file = "{}/validations.txt".format(self.model_dir)
@@ -44,9 +45,12 @@ class TrainManager:
         self.bos_index = self.model.bos_index
         self.criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
         pos_weight = train_config.get("pos_weight", 1.0)
+        pos_weight_torch = torch.from_numpy(np.array([pos_weight])).float()
+        if self.use_cuda:
+            pos_weight_torch = pos_weight_torch.cuda()
         self.reward_criterion = torch.nn.BCEWithLogitsLoss(
-            reduction="sum", pos_weight=
-            torch.from_numpy(np.array([pos_weight])).float())
+            reduction="sum", pos_weight=pos_weight_torch
+            )
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
         if train_config["loss"].lower() not in ["crossentropy", "xent",
                                                 "mle", "cross-entropy"]:
@@ -174,7 +178,6 @@ class TrainManager:
         self.stop = False
         self.total_tokens = 0
         self.max_output_length = train_config.get("max_output_length", None)
-        self.use_cuda = train_config["use_cuda"]
         if self.use_cuda:
             self.model.cuda()
         self.logging_freq = train_config.get("logging_freq", 100)
