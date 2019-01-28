@@ -36,6 +36,8 @@ class TrainManager:
         """
         train_config = config["training"]
         self.model = model
+        self.slope = 1.0
+        self.slope_annealing_rate = train_config.get("slope_annealing_rate", 1.1)
         self.use_cuda = train_config["use_cuda"]
         self.overwrite = train_config.get("overwrite", False)
         self.model_dir = self._make_model_dir(train_config["model_dir"])
@@ -224,6 +226,7 @@ class TrainManager:
             "best_ckpt_score": self.best_ckpt_score,
             "best_ckpt_iteration": self.best_ckpt_iteration,
             "model_state": self.model.state_dict(),
+            "slope": self.slope
         }
         if type(self.optimizer) is not dict:
             state["optimizer_state"] = self.optimizer.state_dict()
@@ -269,6 +272,7 @@ class TrainManager:
 
         # restore counts
         self.steps = model_checkpoint["steps"]
+        self.slope = model_checkpoint["slope"]
         self.total_tokens = model_checkpoint["total_tokens"]
         self.best_ckpt_score = model_checkpoint["best_ckpt_score"]
         self.best_ckpt_iteration = model_checkpoint["best_ckpt_iteration"]
@@ -378,8 +382,13 @@ class TrainManager:
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
                             criterion=self.criterion,
-                            reward_criterion=self.reward_criterion
+                            reward_criterion=self.reward_criterion,
+                            slope=self.slope
                     )
+
+                    # anneal slope at each validation
+                    self.slope *= self.slope_annealing_rate
+                    self.logger.info("New slope: {}".format(self.slope))
 
                     # TODO decide whether to write checkpoint: use corr?
                     # TODO write checkpoint when one of them is better
@@ -660,7 +669,8 @@ class TrainManager:
             reward_criterion=self.reward_criterion,
             logging_fun=
             self.logger.debug if not self.steps % self.logging_freq else None,
-            marking_fun=self.model.marking_fun
+            marking_fun=self.model.marking_fun,
+            slope=self.slope
         )
 
         norm_xent_loss = self.loss_weights["mt"]*(xent_loss.sum() / normalizer)
@@ -898,7 +908,7 @@ def train(cfg_file):
                 max_output_length=trainer.max_output_length,
                 model=model, use_cuda=trainer.use_cuda, criterion=None,
                 beam_size=beam_size, beam_alpha=beam_alpha,
-                reward_criterion=None)
+                reward_criterion=None, slope=trainer.slope)
         
         if "trg" in test_data.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \

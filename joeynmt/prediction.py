@@ -14,7 +14,7 @@ from joeynmt.batch import Batch
 
 def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                      level, eval_metric, criterion, reward_criterion,
-                     beam_size=0, beam_alpha=-1):
+                     beam_size=0, beam_alpha=-1, slope=1):
     """
     Generate translations for the given data.
     If `criterion` is not None and references are given, also compute the loss.
@@ -62,7 +62,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                 batch_xent_loss, batch_corrector_loss = model.get_loss_for_batch(
                     batch, criterion=criterion,
                     reward_criterion=reward_criterion,
-                    marking_fun=model.marking_fun)
+                    marking_fun=model.marking_fun, slope=slope)
 
                 total_mt_loss += batch_xent_loss
                 total_corr_loss += batch_corrector_loss
@@ -76,7 +76,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                 rewards = \
                 model.run_batch(
                         batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
-                        max_output_length=max_output_length)
+                        max_output_length=max_output_length, slope=slope)
 
             if rewards is not None:
 
@@ -266,6 +266,7 @@ def test(cfg_file,
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
     model.load_state_dict(model_checkpoint["model_state"])
+    slope = model_checkpoint["slope"]
 
     if use_cuda:
         model.cuda()
@@ -290,7 +291,8 @@ def test(cfg_file,
                 max_output_length=max_output_length, eval_metric=eval_metric,
                 use_cuda=use_cuda, criterion=None, reward_criterion=None,
                 beam_size=beam_size,
-                beam_alpha=beam_alpha
+                beam_alpha=beam_alpha,
+                slope=slope
             )
 
         if "trg" in data_set.fields:
@@ -317,12 +319,23 @@ def test(cfg_file,
                                   idx=range(len(hypotheses)),
                                   output_prefix=attention_path)
 
-        if corr_attention_scores is not None and save_attention:
-            attention_path = "{}/{}.{}.corr.att".format(dir, data_set_name,
+        if corr_attention_scores_src is not None and save_attention:
+            attention_path = "{}/{}.{}.corr.src.att".format(dir, data_set_name,
                                                         step)
-            print("Corrected attention plots saved to: {}.xx".format(
+            print("Corrected src attention plots saved to: {}.xx".format(
                 attention_path))
-            store_attention_plots(attentions=corr_attention_scores,
+            store_attention_plots(attentions=corr_attention_scores_src,
+                                  targets=corr_hypotheses_raw,
+                                  sources=[s for s in data_set.src],
+                                  idx=range(len(corr_hypotheses)),
+                                  output_prefix=attention_path)
+
+        if corr_attention_scores_trg is not None and save_attention:
+            attention_path = "{}/{}.{}.corr.trg.att".format(dir, data_set_name,
+                                                        step)
+            print("Corrected trg attention plots saved to: {}.xx".format(
+                attention_path))
+            store_attention_plots(attentions=corr_attention_scores_trg,
                                   targets=corr_hypotheses_raw,
                                   sources=[s for s in data_set.src],
                                   idx=range(len(corr_hypotheses)),

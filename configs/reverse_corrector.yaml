@@ -47,7 +47,8 @@ training:
     print_valid_sents: 3
    # load_model: "reverse_bahdanau_correct/1000.ckpt"
     loss_weights: {"mt": 1., "corrector": 1.}
-    pos_weight: 0.8  # >1 increases the recall, <1 increases the precision.
+    pos_weight: 1  # >1 increases the recall, <1 increases the precision.
+    slope_annealing_rate: 1.0
 
 model:
     simulated_marking_function: accuracy # recall, lcs, accuracy
@@ -86,6 +87,7 @@ model:
         type: "lstm"
         hidden_size: 64
         num_layers: 1
+        dropout: 0.1
         bidirectional: True
         attention: "bahdanau"
         reward_coeff: 5

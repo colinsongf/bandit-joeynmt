@@ -111,7 +111,8 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
 
-    def forward(self, src, trg_input, src_mask, src_lengths, correct=False):
+    def forward(self, src, trg_input, src_mask, src_lengths, correct=False,
+                slope=1.0):
         """
         Take in and process masked src and target sequences.
         Use the encoder hidden state to initialize the decoder
@@ -176,7 +177,8 @@ class Model(nn.Module):
             corrector_output = self.correct(encoder_states=encoder_output.detach(),
                          greedy_pred=greedy_pred.detach(),
                          src_mask=src_mask,
-                         trg_mask=torch_trg_mask
+                         trg_mask=torch_trg_mask,
+                         slope=slope
                          )
 
             corr_logits, a_s, a_t, rewards, reward_logits = corrector_output
@@ -225,7 +227,7 @@ class Model(nn.Module):
 
     def correct(self, encoder_states, greedy_pred,
                          src_mask,
-                         trg_mask):
+                         trg_mask, slope):
         """
         Run the corrector to predict corrections for hidden states
         :param y:
@@ -247,7 +249,8 @@ class Model(nn.Module):
         return self.corrector(encoder_states = encoder_states,
                               decoder_outputs = self.trg_embed(greedy_pred),
                               src_mask = src_mask,
-                              trg_mask = trg_mask)
+                              trg_mask = trg_mask,
+                              slope=slope)
 
     def encode(self, src, src_length, src_mask):
         """
@@ -283,7 +286,7 @@ class Model(nn.Module):
                             hidden=decoder_hidden)
 
     def get_loss_for_batch(self, batch, criterion, reward_criterion,
-                           logging_fun=None, marking_fun=None):
+                           logging_fun=None, marking_fun=None, slope=1.0):
         """
         Compute non-normalized loss for batch for corrector and mt
 
@@ -299,7 +302,8 @@ class Model(nn.Module):
         mt_outputs, original_pred, rewards, reward_logits, \
         corr_outputs, a_s, a_t = self.forward(
                 src=batch.src, trg_input=batch.trg_input, correct=True,
-                src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+                src_mask=batch.src_mask, src_lengths=batch.src_lengths,
+                slope=slope)
 
         # reward model is trained to predict whether mt predictions are correct
         # the targets for this model are computed dynamically
@@ -339,10 +343,8 @@ class Model(nn.Module):
         # compute log probs of correction
         corr_log_probs = F.log_softmax(corr_outputs, dim=-1)
 
-        # use the gold rewards during training: we only care about the xent
-        # of the corrector where it's supposed to correct
-        #comb_log_probs = torch.where(reward_targets_torch.byte(), mt_log_probs,
-        #                             corr_log_probs)
+        # use the predicted rewards during training
+        comb_log_probs = rewards*mt_log_probs + (1-rewards)*corr_log_probs
 
        # print("CORR", corr_log_probs[1,:3])
        # print("MT", mt_log_probs[1,:3])
@@ -350,9 +352,9 @@ class Model(nn.Module):
        # print("COMB", comb_log_probs[1,:3])
 
         # compute batch loss for corrector
-        # TODO does not include reward, because otherwise we stop training when mt model is perfect
+        # TODO includes reward
         corrector_loss = criterion(
-            input=corr_log_probs.contiguous().view(-1, corr_log_probs.size(-1)),
+            input=comb_log_probs.contiguous().view(-1, corr_log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))
 
         #print("mt loss", mt_loss)
@@ -393,7 +395,8 @@ class Model(nn.Module):
 
 
 
-    def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
+    def run_batch(self, batch, max_output_length, beam_size, beam_alpha,
+                  slope=1.0):
         """
         Get outputs and attentions scores for a given batch
 
@@ -456,7 +459,8 @@ class Model(nn.Module):
         corrector_output = self.correct(encoder_states=encoder_output,
                                         greedy_pred=torch_stacked_output,
                                         src_mask=batch.src_mask,
-                                        trg_mask=torch_trg_mask)
+                                        trg_mask=torch_trg_mask,
+                                        slope=slope)
 
 
         # bridge two decoders

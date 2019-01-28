@@ -172,7 +172,7 @@ class CoattentiveDiscreteCorrector(Decoder):
         comb_states = c_t
         return comb_states, a_s, a_t  # batch x len x 2*hidden
 
-    def forward(self, encoder_states, decoder_outputs, src_mask, trg_mask):
+    def forward(self, encoder_states, decoder_outputs, src_mask, trg_mask, slope=1.0):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
 
@@ -205,7 +205,6 @@ class CoattentiveDiscreteCorrector(Decoder):
         reward_logits = self.reward_output_layer(rnn_states)
         # prob of being 1: sigmoid(output)
         # prob of being 0: 1-sigmoid(output)
-        slope = 1
         # TODO modify slope
         rewards = self.binary_layer((reward_logits, slope))
         return corr_logits, a_s, a_t, rewards, reward_logits
