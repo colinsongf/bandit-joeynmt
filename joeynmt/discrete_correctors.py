@@ -106,14 +106,15 @@ class CoattentiveDiscreteCorrector(Decoder):
         # apply dropout ot the rnn input (embedded decoder predictions)
         x = self.rnn_input_dropout(inputs)  # batch x time x embed
         # run through rnn (backwards)
-        hidden = None
-        rnn_outputs = []
+        rnn_outputs, _ = rnn(x)
+        #hidden = None
+        #rnn_outputs = []
         #for t in range(x.shape[1] - 1, -1, -1):  # backwards iteration
-        for t in range(x.shape[1]):
-            x_i = x[:, t, :].unsqueeze(1)
-            rnn_output, hidden = rnn(x_i, hx=hidden)  # batch x 1 x hidden
-            rnn_outputs.append(rnn_output.squeeze(1))
-        rnn_outputs = torch.stack(rnn_outputs, dim=1) #.flip(1)
+        #for t in range(x.shape[1]):
+        #    x_i = x[:, t, :].unsqueeze(1)
+        #    rnn_output, hidden = rnn(x_i, hx=hidden)  # batch x 1 x hidden
+        #    rnn_outputs.append(rnn_output.squeeze(1))
+        #rnn_outputs = torch.stack(rnn_outputs, dim=1) #.flip(1)
         return rnn_outputs
 
     def _read_rnn(self, input):
@@ -154,7 +155,7 @@ class CoattentiveDiscreteCorrector(Decoder):
         l_masked_s = torch.where(src_mask, l.transpose(dim0=1, dim1=2), l.new_full([1], float('-inf')))
         l_masked_t = torch.where(trg_mask, l, l.new_full([1], float('-inf')))
         a_s = torch.softmax(l_masked_t, dim=2)  # normalize over trg dim -> batch x src_len x trg_len
-        a_t = torch.softmax(l_masked_s, dim=2)  # normalize over src dim -> batch x trg_len x src_len #transpose(dim0=1, dim1=2)
+        a_t = torch.softmax(l_masked_s, dim=2)  # normalize over src dim -> batch x trg_len x src_len
         #print("a_s", a_s)
         #print("a_t", a_t)
        # c_t = torch.bmm(a_t, encoder_outputs)
