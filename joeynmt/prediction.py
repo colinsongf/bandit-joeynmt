@@ -13,7 +13,8 @@ from joeynmt.batch import Batch
 
 
 def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
-                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1):
+                     level, eval_metric, criterion, reward_criterion,
+                     beam_size=0, beam_alpha=-1):
     """
     Generate translations for the given data.
     If `criterion` is not None and references are given, also compute the loss.
@@ -41,7 +42,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         all_outputs = []
         corr_all_outputs = []
         valid_attention_scores = []
-        corr_valid_attention_scores = []
+        corr_valid_attention_scores_src = []
+        corr_valid_attention_scores_trg = []
         all_rewards = []
         all_reward_targets = []
         total_mt_loss = 0
@@ -59,6 +61,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             if criterion is not None and batch.trg is not None:
                 batch_xent_loss, batch_corrector_loss = model.get_loss_for_batch(
                     batch, criterion=criterion,
+                    reward_criterion=reward_criterion,
                     marking_fun=model.marking_fun)
 
                 total_mt_loss += batch_xent_loss
@@ -68,7 +71,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # run as during inference to produce translations
             # keep track of outputs before and after correction
             # stacked_output, stacked_attention_scores, \
-            output, attention_scores, corr_output, corr_attention_scores, \
+            output, attention_scores, corr_output, corr_attention_scores_src, \
+            corr_attention_scores_trg, \
                 rewards = \
                 model.run_batch(
                         batch=batch, beam_size=beam_size, beam_alpha=beam_alpha,
@@ -103,9 +107,12 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             valid_attention_scores.extend(
                 attention_scores[sort_reverse_index]
                 if attention_scores is not None else [])
-            corr_valid_attention_scores.extend(
-                corr_attention_scores[sort_reverse_index]
-                if corr_attention_scores is not None else [])
+            corr_valid_attention_scores_src.extend(
+                corr_attention_scores_src[sort_reverse_index]
+                if corr_attention_scores_src is not None else [])
+            corr_valid_attention_scores_trg.extend(
+                corr_attention_scores_trg[sort_reverse_index]
+                if corr_attention_scores_trg is not None else [])
 
             if rewards is not None:
                 all_rewards.extend(rewards_cut[sort_reverse_index]
@@ -204,7 +211,8 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
            valid_sources_raw, valid_references, \
            valid_hypotheses, corr_valid_hypotheses,\
            decoded_valid, corr_decoded_valid, \
-           valid_attention_scores, corr_valid_attention_scores, \
+           valid_attention_scores, corr_valid_attention_scores_src,\
+           corr_valid_attention_scores_trg, \
            all_rewards, \
            all_reward_targets
 
@@ -276,11 +284,12 @@ def test(cfg_file,
         mt_loss, corr_loss, ppl, sources, sources_raw, references, \
             hypotheses, corr_hypotheses, \
             hypotheses_raw, corr_hypotheses_raw, \
-            attention_scores, corr_attention_scores, \
+            attention_scores, corr_attention_scores_src, corr_attention_scores_trg, \
             rewards, reward_targets = validate_on_data(
                 model, data=data_set, batch_size=batch_size, level=level,
                 max_output_length=max_output_length, eval_metric=eval_metric,
-                use_cuda=use_cuda, criterion=None, beam_size=beam_size,
+                use_cuda=use_cuda, criterion=None, reward_criterion=None,
+                beam_size=beam_size,
                 beam_alpha=beam_alpha
             )
 

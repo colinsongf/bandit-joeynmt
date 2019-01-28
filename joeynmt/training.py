@@ -42,7 +42,11 @@ class TrainManager:
         self.logger = self._make_logger()
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
-        criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
+        self.criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
+        pos_weight = train_config.get("pos_weight", 1.0)
+        self.reward_criterion = torch.nn.BCEWithLogitsLoss(
+            reduction="sum", pos_weight=
+            torch.from_numpy(np.array([pos_weight])).float())
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
         if train_config["loss"].lower() not in ["crossentropy", "xent",
                                                 "mle", "cross-entropy"]:
@@ -55,7 +59,7 @@ class TrainManager:
             all_params = list(model.named_parameters())
             # sorting is required to keep track of parameter groups for optimizers
             sorted_corr = sorted(
-                {k: v for (k, v) in all_params if "decoder" not in k}.items())  # if "corrector" in key
+                {k: v for (k, v) in all_params if "corrector" in k}.items())#"decoder" not in k}.items())  # if "corrector" in key
             self.corrector_params = OrderedDict(sorted_corr)
             self.logger.debug(
                 "CORRECTOR PARAMS: {}".format(self.corrector_params.keys()))
@@ -163,7 +167,6 @@ class TrainManager:
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
-        self.criterion = criterion
         self.normalization = train_config.get("normalization", "batch")
         self.normalize_corrector = train_config.get("normalize_corrector", False)
         self.steps = 0
@@ -363,14 +366,16 @@ class TrainManager:
                         valid_sources_raw, valid_references, \
                         valid_hypotheses, corr_valid_hypotheses, \
                         valid_hypotheses_raw, corr_valid_hypotheses_raw,\
-                        valid_attention_scores, corr_valid_attention_scores, \
+                        valid_attention_scores, corr_valid_attention_scores_src,\
+                        corr_valid_attention_scores_trg, \
                         rewards, reward_targets = validate_on_data(
                             batch_size=self.batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
-                            criterion=self.criterion
+                            criterion=self.criterion,
+                            reward_criterion=self.reward_criterion
                     )
 
                     # TODO decide whether to write checkpoint: use corr?
@@ -583,13 +588,21 @@ class TrainManager:
                                               self.model_dir,
                                               self.steps))
                     # store attention after correction
-                    store_attention_plots(attentions=corr_valid_attention_scores,
+                    store_attention_plots(attentions=corr_valid_attention_scores_src,
                                           targets=corr_valid_hypotheses_raw,
                                           sources=[s for s in valid_data.src],
                                           idx=[0, 1, 2, random_example],
-                                          output_prefix="{}/corr.att.{}".format(
+                                          output_prefix="{}/corr.src.att.{}".format(
                                               self.model_dir,
                                               self.steps))
+                    store_attention_plots(
+                        attentions=corr_valid_attention_scores_trg,
+                        targets=corr_valid_hypotheses_raw,
+                        sources=[s for s in valid_data.src],
+                        idx=[0, 1, 2, random_example],
+                        output_prefix="{}/corr.trg.att.{}".format(
+                            self.model_dir,
+                            self.steps))
                     store_correction_plots(
                         corrections=rewards, rewards=rewards,
                         targets=valid_hypotheses_raw,
@@ -634,7 +647,6 @@ class TrainManager:
         # only if decoder and embeddings not frozen
 
         # grads for corrector params are zero here
-        #print("grad norms after xent", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
         #print(["corrector" in k for k,v in self.model.named_parameters() if v.grad is not None])
         assert not any(["corrector" in k for k,v in self.model.named_parameters() if v.grad is not None and torch.norm(v.grad) > 0])
 
@@ -642,6 +654,7 @@ class TrainManager:
         # with torch.autograd.grad(outputs, inputs, grad_outputs=None, retain_graph=None, create_graph=False, only_inputs=True, allow_unused=False)
         xent_loss, corrector_loss = self.model.get_loss_for_batch(
             batch=batch, criterion=self.criterion,
+            reward_criterion=self.reward_criterion,
             logging_fun=
             self.logger.debug if not self.steps % self.logging_freq else None,
             marking_fun=self.model.marking_fun
@@ -654,6 +667,9 @@ class TrainManager:
         if not all(["corrector" in p for p in self.trainable_params]) and self.loss_weights["mt"] > 0.:
             # compute gradient
             norm_xent_loss.backward(retain_graph=True)
+
+        #print("grad norms after xent", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
+
 
         if self.normalize_corrector:
             # use xent loss of decoder as factor to scale corrector loss
@@ -677,7 +693,7 @@ class TrainManager:
                     param.grad = grad
             #print(torch.autograd.grad(corrector_loss, inputs=inputs))
 
-       # print("grad norms after corr", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
+        #print("grad norms after corr", [(k, torch.norm(v.grad, 2)) for k, v in self.model.named_parameters() if v.grad is not None])
 
         if not self.steps % self.logging_freq:
             self.logger.debug("Gradient norms (w/o clipping): {}".format(
@@ -871,14 +887,15 @@ def train(cfg_file):
         mt_loss, corr_loss, ppl, sources, sources_raw, references, \
         hypotheses, corr_hypotheses, \
         hypotheses_raw, corr_hypotheses_raw, \
-        attention_scores, corr_attention_scores, \
+        attention_scores, corr_attention_scores_src, corr_attention_scores_trg, \
         rewards, reward_targets =\
             validate_on_data(
                 data=test_data, batch_size=trainer.batch_size,
                 eval_metric=trainer.eval_metric, level=trainer.level,
                 max_output_length=trainer.max_output_length,
                 model=model, use_cuda=trainer.use_cuda, criterion=None,
-                beam_size=beam_size, beam_alpha=beam_alpha)
+                beam_size=beam_size, beam_alpha=beam_alpha,
+                reward_criterion=None)
         
         if "trg" in test_data.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \

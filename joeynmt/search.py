@@ -7,7 +7,7 @@ from joeynmt.helpers import tile
 
 
 def greedy(src_mask, embed, bos_index, max_output_length, decoder,
-           encoder_output, encoder_hidden, comb_states=None):
+           encoder_output, encoder_hidden, comb_states=None, prev_outputs=None):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
 
@@ -34,16 +34,18 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
     for t in range(max_output_length):
         if comb_states is not None:
             comb_state = comb_states[:,t,:].unsqueeze(1)
-            out, hidden, att_probs, prev_att_vector, reward = decoder(
-                encoder_output=encoder_output,
-                encoder_hidden=encoder_hidden,
-                src_mask=src_mask,
-                trg_embed=embed(prev_y),
-                hidden=hidden,
-                prev_att_vector=prev_att_vector,
-                unrol_steps=1,
-                comb_states=comb_state
-            )
+            out, hidden, att_probs, prev_att_vector, reward, reward_logits = \
+                decoder(
+                    encoder_output=encoder_output,
+                    encoder_hidden=encoder_hidden,
+                    src_mask=src_mask,
+                    trg_embed=embed(prev_y),
+                    hidden=hidden,
+                    prev_att_vector=prev_att_vector,
+                    unrol_steps=1,
+                    comb_states=comb_state
+                )
+            # combine with reward prediction
         else:
             # decode one single step
             out, hidden, att_probs, prev_att_vector = decoder(
@@ -58,8 +60,24 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
             reward = None
         # out: batch x time=1 x vocab (logits)
 
+        # TODO add reward here
         # greedy decoding: choose arg max over vocabulary in each step
         next_word = torch.argmax(out, dim=-1)  # batch x time=1
+        if prev_outputs is not None:
+            prev_output = prev_outputs[:, t].unsqueeze(-1)
+
+          #  if reward[0:5].cpu().numpy().sum()<4:#
+
+#                print("corr", next_word[0:5], next_word.shape)
+#                print("prev", prev_output[0:5], prev_output.shape)
+                #print(reward[0:5])
+#                print("r", reward[0:5].squeeze().byte(), reward.shape)
+ #               print()
+            assert next_word.shape == prev_output.shape == reward.squeeze(-1).shape
+            next_word = torch.where(reward.squeeze(-1).byte(), prev_output, next_word)
+            #(1 - reward) * next_word.float() + reward * prev_output.float()
+
+           ## print("next", next_word[0:5])
         output.append(next_word.squeeze(1).cpu().numpy())
         prev_y = next_word
         attention_scores.append(att_probs.squeeze(1).cpu().numpy())
@@ -183,16 +201,17 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
                 # second decoder is longer than first
                 # TODO solution for now: feed zeros
                 comb_state = comb_states.new_zeros(comb_states.size(0), 1, comb_states.size(-1))
-            out, hidden, att_scores, prev_att_vectors, rewards = decoder(
-                encoder_output=encoder_output,
-                encoder_hidden=encoder_hidden,
-                src_mask=src_mask,
-                trg_embed=embed(decoder_input),
-                hidden=hidden,
-                prev_att_vector=prev_att_vectors,
-                unrol_steps=1,
-                comb_states=comb_state
-            )
+            out, hidden, att_scores, prev_att_vectors, rewards, reward_logits\
+                = decoder(
+                    encoder_output=encoder_output,
+                    encoder_hidden=encoder_hidden,
+                    src_mask=src_mask,
+                    trg_embed=embed(decoder_input),
+                    hidden=hidden,
+                    prev_att_vector=prev_att_vectors,
+                    unrol_steps=1,
+                    comb_states=comb_state
+                )
         else:
             out, hidden, att_scores, prev_att_vectors = decoder(
                 encoder_output=encoder_output,

@@ -8,7 +8,7 @@ from joeynmt.embeddings import Embeddings
 from joeynmt.encoders import Encoder, RecurrentEncoder
 from joeynmt.decoders import Decoder, RecurrentDecoder
 from joeynmt.correctors import RecurrentCorrector, Corrector
-from joeynmt.discrete_correctors import RecurrentDiscreteCorrector
+from joeynmt.discrete_correctors import CoattentiveDiscreteCorrector
 from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
@@ -45,11 +45,9 @@ def build_model(cfg: dict = None,
     #                               trg_embed=trg_embed, encoder=encoder,
     #                               decoder_size=decoder.hidden_size)
 
-    corrector = RecurrentDiscreteCorrector(**cfg["corrector"],
-                                           encoder=encoder,
+    corrector = CoattentiveDiscreteCorrector(**cfg["corrector"],
                                            vocab_size=len(trg_vocab),
-                                           emb_size=trg_embed.embedding_dim,
-                                           prev_hidden_size=decoder.hidden_size)
+                                           emb_size=trg_embed.embedding_dim)
 
     model = Model(encoder=encoder, decoder=decoder, corrector=corrector,
                   src_embed=src_embed, trg_embed=trg_embed,
@@ -152,54 +150,82 @@ class Model(nn.Module):
             #    y=rev_predicted, y_length=pred_length,
             #    mask=rev_pred_mask, y_states=att_vectors,
             #    encoder_output=encoder_output, src_mask=src_mask)
-            comb_states = self.corrector.decoder_bridge(
-                prev_states=att_vectors.detach(),
-                prev_outputs=self.trg_embed(greedy_pred.detach()))
-            # batch x trg_len x emb+hidden
+            #comb_states = self.corrector.decoder_bridge(
+            #   # prev_states=att_vectors.detach(),
+            #    encoder_output,
+            #    prev_outputs=self.trg_embed(greedy_pred.detach()))
+            ## batch x trg_len x emb+hidden
 
             # run decoder again with corrections*(1-rewards)
             # if reward is 1 -> no correction
-            corrector_output = self.correct(encoder_output=encoder_output,
-                         encoder_hidden=encoder_hidden,
-                         src_mask=src_mask,
-                         trg_input=trg_input,
-                         unrol_steps=unrol_steps,
-                         comb_states=comb_states)
-            corr_outputs, corr_hidden, corr_src_att_probs, \
-            corr_att_vectors, rewards = corrector_output
+            #corrector_output = self.correct(encoder_output=encoder_output,
+            #             encoder_hidden=encoder_hidden,
+            #             src_mask=src_mask,
+            #             trg_input=trg_input,
+            #             unrol_steps=unrol_steps,
+            #             comb_states=comb_states)
+            # compute mask with numpy
+            eos = np.where(greedy_pred == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
+            # mark everything after first eos with 1, even if non-eos
+            eos_filled = np.where(np.cumsum(eos, axis=1) >= 1, 1, 0)
+            # then create mask with 0s after first eos
+            trg_mask = np.where(np.cumsum(eos_filled, axis=1) > 1, 0, 1)
+            torch_trg_mask = src_mask.new(trg_mask).unsqueeze(1)
 
-            return outputs, greedy_pred, rewards, corr_outputs, corr_hidden, \
-                   corr_src_att_probs
+            # stopping grad for encoder and greedy output
+            corrector_output = self.correct(encoder_states=encoder_output.detach(),
+                         greedy_pred=greedy_pred.detach(),
+                         src_mask=src_mask,
+                         trg_mask=torch_trg_mask
+                         )
+
+            corr_logits, a_s, a_t, rewards, reward_logits = corrector_output
+            #corr_outputs, corr_hidden, corr_src_att_probs, \
+            #corr_att_vectors, rewards, reward_logits = corrector_output
+
+            # new: combine with reward
+            # reward chooses between corrector and mt: if 1 -> mt, if 0 -> corr
+            #print("greedy output", greedy_pred[0])
+            corr_pred = torch.argmax(corr_logits, dim=-1) #.cpu().numpy()  # batch x length
+           # print("corr output", corr_pred[0])
+           # print("reward", rewards[0])
+
+            corr_outputs = (1-rewards)*corr_logits + rewards*outputs
+            corr_pred = torch.argmax(corr_outputs, dim=-1) #.cpu().numpy()  # batch x length
+           # print("com output", corr_pred[0])
+
+            return outputs, greedy_pred, rewards, reward_logits, \
+                   corr_outputs, a_s, a_t
 
         return decoder_output
 
-    def _revert_prepare_seq(self, seq, aux_tensor):
-        """
-        Revert a sequence of predictions (np.array, no gradient flow!)
-        and generate mask and length
-        :param seq: batch_size x time
-        :param aux_tensor: tensor to create new tensor like
-        :return:
-        """
-        # compute mask with numpy
-        eos = np.where(seq == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
-        # mark everything after first eos with 1, even if non-eos
-        eos_filled = np.where(np.cumsum(eos, axis=1) >= 1, 1, 0)
-        # then create mask with 0s after first eos
-        mask = np.where(np.cumsum(eos_filled, axis=1) > 1, 0, 1)
+   # def _revert_prepare_seq(self, seq, aux_tensor):
+   ##     """
+   #     Revert a sequence of predictions (np.array, no gradient flow!)
+   #     and generate mask and length
+   #     :param seq: batch_size x time
+   #     :param aux_tensor: tensor to create new tensor like
+   #     :return:
+   #     """
+   #     # compute mask with numpy
+   #     eos = np.where(seq == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
+   #     # mark everything after first eos with 1, even if non-eos
+   #     eos_filled = np.where(np.cumsum(eos, axis=1) >= 1, 1, 0)
+   #     # then create mask with 0s after first eos
+   #     mask = np.where(np.cumsum(eos_filled, axis=1) > 1, 0, 1)
 
         # reverse the prediction to read it in backwards
         # flip in time (copy is needed for contiguity)
-        rev_seq = aux_tensor.new_tensor(
-            np.flip(seq, axis=1).copy(), dtype=torch.long)
-        rev_seq_mask = aux_tensor.new_tensor(np.flip(mask, axis=1).copy(),
-                                             dtype=torch.uint8)
-        seq_length = rev_seq_mask.sum(1)
-        return rev_seq, rev_seq_mask, seq_length
+   #     rev_seq = aux_tensor.new_tensor(
+   #         np.flip(seq, axis=1).copy(), dtype=torch.long)
+   #     rev_seq_mask = aux_tensor.new_tensor(np.flip(mask, axis=1).copy(),
+   #                                          dtype=torch.uint8)
+   #     seq_length = rev_seq_mask.sum(1)
+   #     return rev_seq, rev_seq_mask, seq_length
 
-    def correct(self, encoder_output, encoder_hidden, src_mask, trg_input,
-                unrol_steps, comb_states,
-                decoder_hidden=None):
+    def correct(self, encoder_states, greedy_pred,
+                         src_mask,
+                         trg_mask):
         """
         Run the corrector to predict corrections for hidden states
         :param y:
@@ -210,14 +236,18 @@ class Model(nn.Module):
         """
         #return self.corrector(self.trg_embed(y), y_length, mask,
         #                      y_states, encoder_output.detach(), src_mask)
-        return self.corrector(trg_embed=self.trg_embed(trg_input),
-                            encoder_output=encoder_output,
-                            encoder_hidden=encoder_hidden,
-                            src_mask=src_mask,
-                            unrol_steps=unrol_steps,
-                            hidden=decoder_hidden,
-                            comb_states=comb_states,
-                            )
+        #return self.corrector(trg_embed=self.trg_embed(trg_input),
+        #                    encoder_output=encoder_output,
+        #                    encoder_hidden=encoder_hidden,
+        #                    src_mask=src_mask,
+        #                    unrol_steps=unrol_steps,
+        #                    hidden=decoder_hidden,
+        #                    comb_states=comb_states,
+        #                    )
+        return self.corrector(encoder_states = encoder_states,
+                              decoder_outputs = self.trg_embed(greedy_pred),
+                              src_mask = src_mask,
+                              trg_mask = trg_mask)
 
     def encode(self, src, src_length, src_mask):
         """
@@ -252,7 +282,7 @@ class Model(nn.Module):
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
 
-    def get_loss_for_batch(self, batch, criterion,
+    def get_loss_for_batch(self, batch, criterion, reward_criterion,
                            logging_fun=None, marking_fun=None):
         """
         Compute non-normalized loss for batch for corrector and mt
@@ -263,8 +293,11 @@ class Model(nn.Module):
         :param marking_fun: marking function for inducing token-feedback
         :return:
         """
-        mt_outputs, original_pred, rewards, corr_outputs, corr_hidden, \
-            src_corr_att_probs = self.forward(
+       # mt_outputs, original_pred, rewards, reward_logits, \
+       # corr_outputs, corr_hidden, \
+       #     src_corr_att_probs =
+        mt_outputs, original_pred, rewards, reward_logits, \
+        corr_outputs, a_s, a_t = self.forward(
                 src=batch.src, trg_input=batch.trg_input, correct=True,
                 src_mask=batch.src_mask, src_lengths=batch.src_lengths)
 
@@ -290,15 +323,34 @@ class Model(nn.Module):
             input=mt_log_probs.contiguous().view(-1, mt_log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))
 
+        # binary cross-entropy with reward_targets
+        # print(rewards)
+        # print(reward_targets)
+        reward_targets_torch = reward_logits.new(reward_targets)
+        reward_loss = reward_criterion(
+            input=reward_logits.contiguous().view(-1),
+            target=reward_targets_torch.contiguous().view(-1))
+
         # loss is MSE between targets and predictions
-        reward_loss = torch.mean(
-            (rewards.new(reward_targets)-rewards)**2)
+        # reward_loss = torch.mean(
+        #     (rewards.new(reward_targets)-rewards)**2)
 
         # loss for correction: log-likelihood of reference under corrected model
         # compute log probs of correction
         corr_log_probs = F.log_softmax(corr_outputs, dim=-1)
 
+        # use the gold rewards during training: we only care about the xent
+        # of the corrector where it's supposed to correct
+        #comb_log_probs = torch.where(reward_targets_torch.byte(), mt_log_probs,
+        #                             corr_log_probs)
+
+       # print("CORR", corr_log_probs[1,:3])
+       # print("MT", mt_log_probs[1,:3])
+       # print("R", rewards[1,:3])
+       # print("COMB", comb_log_probs[1,:3])
+
         # compute batch loss for corrector
+        # TODO does not include reward, because otherwise we stop training when mt model is perfect
         corrector_loss = criterion(
             input=corr_log_probs.contiguous().view(-1, corr_log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))
@@ -319,6 +371,12 @@ class Model(nn.Module):
             logging_fun("after corr: {}".format(
                 " ".join(arrays_to_sentences(
                     corr_pred, vocabulary=self.trg_vocab)[0])))
+            sample_rewards = rewards.squeeze(-1).detach().cpu().numpy()
+            logging_fun("rewards: {}".format(sample_rewards[0]))
+            comb_pred = np.where(sample_rewards, original_pred, corr_pred)
+            logging_fun("comb with rewards: {}".format(
+                " ".join(arrays_to_sentences(comb_pred,
+                                             vocabulary=self.trg_vocab)[0])))
             logging_fun("ref: {}".format(
                 " ".join(arrays_to_sentences(
                     batch.trg, vocabulary=self.trg_vocab)[0])))
@@ -377,6 +435,7 @@ class Model(nn.Module):
                             return_attention_vectors=True)
         # TODO decoder predictions: for training always greedy
 
+
         # pre-compute projected encoder outputs
         # (the "keys" for the attention mechanism)
         # this is only done for efficiency
@@ -385,6 +444,20 @@ class Model(nn.Module):
 
         # move output into torch again
         torch_stacked_output = encoder_output.new(stacked_output).long()
+
+        # compute mask with numpy
+        eos = np.where(stacked_output == self.trg_vocab.stoi[EOS_TOKEN], 1, 0)
+        # mark everything after first eos with 1, even if non-eos
+        eos_filled = np.where(np.cumsum(eos, axis=1) >= 1, 1, 0)
+        # then create mask with 0s after first eos
+        trg_mask = np.where(np.cumsum(eos_filled, axis=1) > 1, 0, 1)
+        torch_trg_mask = batch.src_mask.new(trg_mask).unsqueeze(1)
+
+        corrector_output = self.correct(encoder_states=encoder_output,
+                                        greedy_pred=torch_stacked_output,
+                                        src_mask=batch.src_mask,
+                                        trg_mask=torch_trg_mask)
+
 
         # bridge two decoders
         #rev_predicted, rev_pred_mask, pred_length = \
@@ -398,42 +471,65 @@ class Model(nn.Module):
         #comb_states = torch.cat([stacked_att_vectors, rnn_outputs],
         #                        dim=2)  # batch x time x decoder.hidden_size+hidden
         # Problem: comb_states might be shorter than max_length
-        comb_states = self.corrector.decoder_bridge(
-            prev_states=encoder_output.new(stacked_att_vectors).detach(),
-            prev_outputs=self.trg_embed(torch_stacked_output.detach()))
+       # comb_states = self.corrector.decoder_bridge(
+       #     prev_states=encoder_output.new(stacked_att_vectors).detach(),
+       #     prev_outputs=self.trg_embed(torch_stacked_output.detach()))
 
         # run corrector
-        if beam_size == 0:
-            corrected_stacked_output, corrected_stacked_attention_scores, _, \
-                rewards = \
-                greedy(
-                        encoder_hidden=encoder_hidden,
-                        encoder_output=encoder_output,
-                        src_mask=batch.src_mask, embed=self.trg_embed,
-                        bos_index=self.bos_index, decoder=self.corrector,
-                        max_output_length=max_output_length,
-                        comb_states=comb_states)
+        #if beam_size == 0:
+        #    corrected_stacked_output, corrected_stacked_attention_scores, _, \
+        #        rewards = \
+        #        greedy(
+        #                encoder_hidden=encoder_hidden,
+        #                encoder_output=encoder_output,
+        #                src_mask=batch.src_mask, embed=self.trg_embed,
+        #                bos_index=self.bos_index, decoder=self.corrector,
+        #                max_output_length=max_output_length,
+        #                comb_states=comb_states,
+        #                prev_outputs=torch_stacked_output)
             # batch, time, max_src_length
-        else:  # beam size
-            # TODO track and return rewards
-            rewards = None
-            corrected_stacked_output, corrected_stacked_attention_scores, _, = \
-                beam_search(size=beam_size, encoder_output=encoder_output,
-                            encoder_hidden=encoder_hidden,
-                            src_mask=batch.src_mask, embed=self.trg_embed,
-                            max_output_length=max_output_length,
-                            alpha=beam_alpha, eos_index=self.eos_index,
-                            pad_index=self.pad_index,
-                            bos_index=self.bos_index,
-                            decoder=self.corrector,
-                            src_lengths=batch.src_lengths,
-                            return_attention_vectors=False,
-                            return_attention=True,
-                            comb_states=comb_states)
+        #else:  # beam size
+        #    # TODO track and return rewards
+        #    rewards = None
+         #   corrected_stacked_output, corrected_stacked_attention_scores, _, = \
+         #       beam_search(size=beam_size, encoder_output=encoder_output,
+         #                   encoder_hidden=encoder_hidden,
+         #                   src_mask=batch.src_mask, embed=self.trg_embed,
+         #                   max_output_length=max_output_length,
+         #                   alpha=beam_alpha, eos_index=self.eos_index,
+         #                   pad_index=self.pad_index,
+         #                   bos_index=self.bos_index,
+         #                   decoder=self.corrector,
+         #                   src_lengths=batch.src_lengths,
+         #                   return_attention_vectors=False,
+         #                   return_attention=True,
+         #                   comb_states=comb_states)
             #print("Corrected stacked out", corrected_stacked_output)
 
+        corr_logits, a_s, a_t, rewards, reward_logits = corrector_output
+        # corr_outputs, corr_hidden, corr_src_att_probs, \
+        # corr_att_vectors, rewards, reward_logits = corrector_output
+
+        # new: combine with reward
+        # reward chooses between corrector and mt: if 1 -> mt, if 0 -> corr
+        #print("greedy output", torch_stacked_output[0])
+        corr_pred = torch.argmax(corr_logits,
+                                 dim=-1)  # .cpu().numpy()  # batch x length
+        #print("corr output", corr_pred[0])
+        #print("reward", rewards[0])
+        #print(rewards)
+        #print(corr_pred.shape)
+        #print(torch_stacked_output.shape)
+
+        corr_pred = torch.where(rewards.squeeze(-1).byte(),
+                                torch_stacked_output, corr_pred)
+       # corr_pred = (1 - rewards.squeeze(-1)) * corr_pred + rewards.squeeze(-1) * torch_stacked_output
+        #corr_pred = torch.argmax(corr_outputs,
+        #                         dim=-1)  # .cpu().numpy()  # batch x length
+        #print("com output", corr_pred[0])
+
         return stacked_output, stacked_attention_scores, \
-               corrected_stacked_output, corrected_stacked_attention_scores, \
+               corr_pred, a_s.cpu().numpy(), a_t.cpu().numpy(), \
                rewards
 
     def __repr__(self):
