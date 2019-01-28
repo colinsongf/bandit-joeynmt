@@ -600,13 +600,16 @@ class TrainManager:
                                               self.model_dir,
                                               self.steps))
                     # store attention after correction
-                    store_attention_plots(attentions=corr_valid_attention_scores_src,
-                                          targets=corr_valid_hypotheses_raw,
-                                          sources=[s for s in valid_data.src],
-                                          idx=[0, 1, 2, random_example],
-                                          output_prefix="{}/corr.src.att.{}".format(
-                                              self.model_dir,
-                                              self.steps))
+                    # batch x src_len x trg_len
+                    store_attention_plots(
+                        attentions=corr_valid_attention_scores_src,
+                        targets=[s for s in valid_data.src],
+                        sources=corr_valid_hypotheses_raw,
+                        idx=[0, 1, 2, random_example],
+                        output_prefix="{}/corr.src.att.{}".format(
+                            self.model_dir,
+                            self.steps))
+                    # batch x trg_len x src_len
                     store_attention_plots(
                         attentions=corr_valid_attention_scores_trg,
                         targets=corr_valid_hypotheses_raw,
