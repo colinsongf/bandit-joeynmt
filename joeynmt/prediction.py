@@ -266,7 +266,7 @@ def test(cfg_file,
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
     model.load_state_dict(model_checkpoint["model_state"])
-    slope = model_checkpoint["slope"]
+    slope = model_checkpoint.get("slope", 1.0)
 
     if use_cuda:
         model.cuda()

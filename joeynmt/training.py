@@ -272,7 +272,7 @@ class TrainManager:
 
         # restore counts
         self.steps = model_checkpoint["steps"]
-        self.slope = model_checkpoint["slope"]
+        self.slope = model_checkpoint.get("slope", 1.0)
         self.total_tokens = model_checkpoint["total_tokens"]
         self.best_ckpt_score = model_checkpoint["best_ckpt_score"]
         self.best_ckpt_iteration = model_checkpoint["best_ckpt_iteration"]
