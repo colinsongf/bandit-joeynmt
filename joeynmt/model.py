@@ -353,6 +353,7 @@ class Model(nn.Module):
 
         # compute batch loss for corrector
         # TODO includes reward
+        # TODO run exp for it
         corrector_loss = criterion(
             input=comb_log_probs.contiguous().view(-1, corr_log_probs.size(-1)),
             target=batch.trg.contiguous().view(-1))

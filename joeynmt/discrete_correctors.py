@@ -205,7 +205,6 @@ class CoattentiveDiscreteCorrector(Decoder):
         reward_logits = self.reward_output_layer(rnn_states)
         # prob of being 1: sigmoid(output)
         # prob of being 0: 1-sigmoid(output)
-        # TODO modify slope
         rewards = self.binary_layer((reward_logits, slope))
         return corr_logits, a_s, a_t, rewards, reward_logits
 
