@@ -51,7 +51,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # TODO save computation: forward pass is computed twice
             # run as during training with teacher forcing
             if criterion is not None and batch.trg is not None:
-                batch_loss = model.get_loss_for_batch(
+                batch_loss, reg_log_probs, reg_pred = model.get_loss_for_batch(
                     batch, criterion=criterion)
                 total_loss += batch_loss
                 total_ntokens += batch.ntokens
@@ -152,6 +152,7 @@ def test(cfg_file,
             step = "best"
 
     batch_size = cfg["training"]["batch_size"]
+    valid_batch_size = cfg["training"].get("valid_batch_size", batch_size)
     use_cuda = cfg["training"].get("use_cuda", False)
     level = cfg["data"]["level"]
     eval_metric = cfg["training"]["eval_metric"]
@@ -172,6 +173,8 @@ def test(cfg_file,
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
     model.load_state_dict(model_checkpoint["model_state"])
 
+    # TODO load pre-trained embeddings if existing
+
     if use_cuda:
         model.cuda()
 
@@ -187,7 +190,7 @@ def test(cfg_file,
 
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
         hypotheses_raw, attention_scores = validate_on_data(
-            model, data=data_set, batch_size=batch_size, level=level,
+            model, data=data_set, batch_size=valid_batch_size, level=level,
             max_output_length=max_output_length, eval_metric=eval_metric,
             use_cuda=use_cuda, criterion=None, beam_size=beam_size,
             beam_alpha=beam_alpha)

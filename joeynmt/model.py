@@ -1,4 +1,5 @@
 # coding: utf-8
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -6,9 +7,12 @@ from joeynmt.initialization import initialize_model
 from joeynmt.embeddings import Embeddings
 from joeynmt.encoders import Encoder, RecurrentEncoder
 from joeynmt.decoders import Decoder, RecurrentDecoder
+from joeynmt.regulators import Regulator, RecurrentRegulator
 from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
+from torch.distributions import Categorical
+
 
 
 def build_model(cfg: dict = None,
@@ -20,14 +24,21 @@ def build_model(cfg: dict = None,
     src_embed = Embeddings(
         **cfg["encoder"]["embeddings"], vocab_size=len(src_vocab),
         padding_idx=src_padding_idx)
+    reg_src_embed = Embeddings(
+        **cfg["regulator"]["embeddings"], vocab_size=len(src_vocab),
+        padding_idx=src_padding_idx)
 
     if cfg.get("tied_embeddings", False) \
         and src_vocab.itos == trg_vocab.itos:
         # share embeddings for src and trg
         trg_embed = src_embed
+        reg_trg_embed = reg_src_embed
     else:
         trg_embed = Embeddings(
             **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
+            padding_idx=trg_padding_idx)
+        reg_trg_embed = Embeddings(
+            **cfg["regulator"]["embeddings"], vocab_size=len(trg_vocab),
             padding_idx=trg_padding_idx)
 
     encoder = RecurrentEncoder(**cfg["encoder"],
@@ -35,9 +46,13 @@ def build_model(cfg: dict = None,
     decoder = RecurrentDecoder(**cfg["decoder"], encoder=encoder,
                                vocab_size=len(trg_vocab),
                                emb_size=trg_embed.embedding_dim)
+    regulator = RecurrentRegulator(**cfg["regulator"],
+                                   src_emb_size=reg_src_embed.embedding_dim,
+                                   trg_emb_size=reg_trg_embed.embedding_dim)
 
-    model = Model(encoder=encoder, decoder=decoder,
+    model = Model(encoder=encoder, decoder=decoder, regulator=regulator,
                   src_embed=src_embed, trg_embed=trg_embed,
+                  reg_src_embed=reg_src_embed, reg_trg_embed=reg_trg_embed,
                   src_vocab=src_vocab, trg_vocab=trg_vocab)
 
     # custom initialization of model parameters
@@ -55,8 +70,11 @@ class Model(nn.Module):
                  name: str = "my_model",
                  encoder: Encoder = None,
                  decoder: Decoder = None,
+                 regulator: Regulator = None,
                  src_embed: Embeddings = None,
                  trg_embed: Embeddings = None,
+                 reg_src_embed: Embeddings = None,
+                 reg_trg_embed: Embeddings = None,
                  src_vocab: Vocabulary = None,
                  trg_vocab: Vocabulary = None):
         """
@@ -75,8 +93,11 @@ class Model(nn.Module):
         self.name = name
         self.src_embed = src_embed
         self.trg_embed = trg_embed
+        self.reg_src_embed = reg_src_embed
+        self.reg_trg_embed = reg_trg_embed
         self.encoder = encoder
         self.decoder = decoder
+        self.regulator = regulator
         self.src_vocab = src_vocab
         self.trg_vocab = trg_vocab
         self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
@@ -95,14 +116,16 @@ class Model(nn.Module):
         :param src_lengths:
         :return: decoder outputs
         """
+        # TODO include regulator
         encoder_output, encoder_hidden = self.encode(src=src,
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
         unrol_steps = trg_input.size(1)
-        return self.decode(encoder_output=encoder_output,
+        decoder_output = self.decode(encoder_output=encoder_output,
                            encoder_hidden=encoder_hidden,
                            src_mask=src_mask, trg_input=trg_input,
                            unrol_steps=unrol_steps)
+        return encoder_output, encoder_hidden, decoder_output
 
     def encode(self, src, src_length, src_mask):
         """
@@ -137,7 +160,17 @@ class Model(nn.Module):
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
 
-    def get_loss_for_batch(self, batch, criterion):
+    def regulate(self, src, hyp):
+        """
+
+        :param src:
+        :param hyp:
+        :return:
+        """
+        return self.regulator(src=self.reg_src_embed(src),
+                              hyp=self.reg_trg_embed(hyp))
+
+    def get_loss_for_batch(self, batch, criterion, regulate=False):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -145,19 +178,135 @@ class Model(nn.Module):
         :param criterion:
         :return:
         """
-        out, hidden, att_probs, _ = self.forward(
-            src=batch.src, trg_input=batch.trg_input,
-            src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+        # TODO keep track of general statistics and budget
+        encoder_out, encoder_hidden, decoder_out = \
+            self.forward(src=batch.src, trg_input=batch.trg_input,
+                         src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+        out, hidden, att_probs, _ = decoder_out
 
-        # compute log probs
-        log_probs = F.log_softmax(out, dim=-1)
+        # compute log probs of teacher-forced decoder for fully-supervised training
+        tf_log_probs = F.log_softmax(out, dim=-1)
+        batch_size = batch.trg.size(0)
+        # in case of full supervision (teacher forcing with post-edit)
+        pe_loss = criterion(
+            input=tf_log_probs.contiguous().view(-1, tf_log_probs.size(-1)),
+            target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
+        assert pe_loss.size(0) == batch_size
+        #print("pe_loss", pe_loss)
+        # batch*length
 
-        # compute batch loss
-        batch_loss = criterion(
-            input=log_probs.contiguous().view(-1, log_probs.size(-1)),
-            target=batch.trg.contiguous().view(-1))
-        # return batch loss = sum over all elements in batch that are not pad
-        return batch_loss
+        if regulate:
+
+            # compute outputs that are presented to user (BS)
+            # TODO make param
+            max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
+            beam_size = 10
+            beam_alpha = 1.0
+            bs_hyp, _ = beam_search(size=beam_size, encoder_output=encoder_out,
+                                encoder_hidden=encoder_hidden,
+                                src_mask=batch.src_mask, embed=self.trg_embed,
+                                max_output_length=max_output_length,
+                                alpha=beam_alpha, eos_index=self.eos_index,
+                                pad_index=self.pad_index, bos_index=self.bos_index,
+                                decoder=self.decoder)
+
+            # padded beam search target
+            trg_np = batch.trg.detach().numpy()
+            #print("bs hyp", bs_hyp)
+            bs_hyp_pad = np.full(shape=(batch_size,max_output_length),
+                                 fill_value=self.pad_index)
+            for i, row in enumerate(bs_hyp):
+                for j, col in enumerate(row):
+                    bs_hyp_pad[i, j] = col
+            #print("padded", bs_hyp_pad)
+            bos_array = np.full(shape=(batch_size, 1), fill_value=self.bos_index)
+            # prepend bos but cut off one bos
+            bs_hyp_pad_bos = np.concatenate((bos_array, bs_hyp_pad), axis=1)[:, :-1]
+            #print("with bos", bs_hyp_pad_bos)
+
+            # treat bs output as target for forced decoding to get log likelihood of bs output
+            bs_out, _, _, _ = self.decode(encoder_output=encoder_out,
+                                       encoder_hidden=encoder_hidden,
+                                       trg_input=batch.trg.new(bs_hyp_pad_bos).long(),
+                                       src_mask=batch.src_mask,
+                                       unrol_steps=bs_hyp_pad_bos.shape[1])
+            bs_log_probs = F.log_softmax(bs_out, dim=-1)
+            #greedy_log_prob = self.force_decode(encoder_output=encoder_out,
+            #                                 encoder_hidden=encoder_hidden,
+            #                                 trg_input=batch.trg.new(greedy_hyp).long(),
+            #                                 src_mask=batch.src_mask)
+
+            # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
+            # 1 if correct, 0 if incorrect
+            # fill bs_hyp with padding, since different length
+            markings = np.array([bs_hyp_pad == trg_np], dtype=float)
+            bs_target = batch.trg.new(bs_hyp_pad).long()
+           # print("trg", batch.trg.detach().numpy())
+           # print("markings", markings)
+            # no need to add trg mask -> padding is masked automatically
+            #print("bs log probs", bs_log_probs.shape)
+            bs_nll = criterion(
+                input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
+                target=bs_target.view(-1))
+            #print("bs nll", bs_nll)
+            # bs hyp might not have the same length as tf seq
+            # TODO prevent model from preferring shorter ones
+            chunk_loss = bs_nll*batch.trg.new(markings).float().view(-1)
+            chunk_loss = chunk_loss.view(batch_size, -1).sum(-1)
+            assert chunk_loss.size(0) == batch_size
+            #print("chunk loss", chunk_loss)
+
+            # in case of self-supervision: run BS to use as target instead
+            # costs: 0
+            # sum over time dimension
+            self_sup_loss = bs_nll.view(batch_size, -1).sum(-1)  # batch
+            assert self_sup_loss.size(0) == batch_size
+            #print("self sup loss", self_sup_loss)
+
+            regulator_out = self.regulate(batch.src, bs_target)
+            reg_log_probs = F.log_softmax(regulator_out, dim=-1)
+
+            #print("reg_log_probs", reg_log_probs.shape)
+
+            # sample an output
+            reg_dist = Categorical(logits=regulator_out)
+            #reg_pred = torch.argmax(regulator_out, dim=-1)
+            reg_pred = reg_dist.sample()
+            #print("regulator prediction", reg_pred)
+
+            # TODO test: always choose full supervision
+            #reg_pred = torch.from_numpy(np.full(shape=(batch_size), fill_value=0)).to(regulator_out.device).long()
+            #print("regulator prediction", reg_pred)
+
+            one_hot_reg_pred = torch.eye(
+                self.regulator.output_size).index_select(dim=0, index=reg_pred)
+            #print("one hot", one_hot_reg_pred)
+
+            # now decide which loss counts for which batch
+            # every element in the batch could get a different type of feedback
+            # so we have to iterate over the batch
+            # or compute losses for all options always and then weigh them
+            # which one is more expensive?
+            # probably option 1
+            # -> regulator predicts one-hot weighting of losses for each input
+            print("regulator pred", one_hot_reg_pred.detach().numpy())
+
+            # need a matrix with
+            # [none, self, chunk, post, ]-losses
+            # TODO is none_loss enough to not make an update?
+            none_loss = self_sup_loss.new_zeros(size=(batch_size,))
+            # TODO make sure order is correct
+            all_losses = torch.stack([none_loss, self_sup_loss, chunk_loss, pe_loss], dim=1)
+            #print("all losses", all_losses)
+            # masking out those losses that were not chosen for batch
+            batch_loss = (one_hot_reg_pred.detach()*all_losses).sum(1)
+            # TODO check if losses balanced? norm needed? avg over batch?
+        else:
+            batch_loss = pe_loss.sum(0)  # with regulator summing is not done within criterion
+            reg_log_probs = None
+            reg_pred = None
+
+        return batch_loss, reg_log_probs, reg_pred
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """

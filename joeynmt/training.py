@@ -5,6 +5,7 @@ import time
 import os
 import numpy as np
 import shutil
+from collections import OrderedDict
 
 
 import torch
@@ -30,26 +31,84 @@ class TrainManager:
         :param model:
         :param config:
         """
+        # TODO 2 modes: pre-training, interactive
         train_config = config["training"]
         self.model = model
+        self.overwrite = train_config.get("overwrite", False)
+        self.model_dir = self._make_model_dir(train_config["model_dir"])
+        self.logger = self._make_logger()
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
-        criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
+        self.loss_weights = train_config.get("loss_weights", {"mt": 1.0, "regulator": 1.0})
+        criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='none')
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
         if train_config["loss"].lower() not in ["crossentropy", "xent",
                                                 "mle", "cross-entropy"]:
             raise NotImplementedError("Loss is not implemented. Only xent.")
         learning_rate = train_config.get("learning_rate", 3.0e-4)
+        print("LEARNING RATE", learning_rate)
         weight_decay = train_config.get("weight_decay", 0)
-        if train_config["optimizer"].lower() == "adam":
-            self.optimizer = torch.optim.Adam(
-                model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+
+        if model.regulator is not None:
+            # 2 sets of parameters -> 2 optimizers
+            # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice
+            all_params = list(model.named_parameters())
+            # sorting is required to keep track of parameter groups for optimizers
+            sorted_reg = sorted(
+                {k: v for (k, v) in all_params if
+                 "reg" in k}.items())  # if "corrector" in key
+            self.regulator_params = OrderedDict(sorted_reg)
+            self.logger.debug(
+                "REGULATOR PARAMS: {}".format(self.regulator_params.keys()))
+            self.logger.debug("REGULATOR size: {}".format(
+                sum([np.prod(p.size()) for p in self.regulator_params.values()])
+            ))
+            sorted_mt = sorted(
+                {k: v for (k, v) in all_params if "reg" not in k}.items())
+            self.mt_params = OrderedDict(sorted_mt)
+            self.logger.debug("MT PARAMS: {}".format(self.mt_params.keys()))
+            self.logger.debug("MT size: {}".format(
+                sum([np.prod(p.size()) for p in self.mt_params.values()])))
+
+            for k, v in model.named_parameters():
+                if v.requires_grad:
+                    self.logger.debug("Updating {}".format(k))
+                else:
+                    self.logger.debug("NOT Updating {}".format(k))
+
+            self.optimizer = {}
+            if train_config["optimizer"].lower() == "adam":
+                self.optimizer["mt"] = torch.optim.Adam(
+                    self.mt_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate["mt"])
+                self.optimizer["regulator"] = torch.optim.Adam(
+                    self.regulator_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate["regulator"])
+            else:
+                # default
+                self.optimizer["mt"] = torch.optim.SGD(
+                    self.mt_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate["mt"])
+                self.optimizer["regulator"] = torch.optim.SGD(
+                    self.regulator_params.values(), weight_decay=weight_decay,
+                    lr=learning_rate["regulator"])
         else:
-            # default
-            self.optimizer = torch.optim.SGD(
-                model.parameters(), weight_decay=weight_decay, lr=learning_rate)
+            if train_config["optimizer"].lower() == "adam":
+                self.optimizer = torch.optim.Adam(
+                    model.parameters(), weight_decay=weight_decay,
+                    lr=learning_rate)
+            else:
+                # default
+                self.optimizer = torch.optim.SGD(
+                    model.parameters(), weight_decay=weight_decay,
+                    lr=learning_rate)
+
         self.schedule_metric = train_config.get("schedule_metric",
                                                 "eval_metric")
+        self.trainable_params = [n for (n, p) in self.model.named_parameters()
+                                 if p.requires_grad]
+        self.logger.info("Trainable parameters: {}".format(
+            self.trainable_params))
         self.ckpt_metric = train_config.get("ckpt_metric", "eval_metric")
         self.best_ckpt_iteration = 0
         # if we schedule after BLEU/chrf, we want to maximize it, else minimize
@@ -67,26 +126,58 @@ class TrainManager:
         if "scheduling" in train_config.keys() and \
                 train_config["scheduling"]:
             if train_config["scheduling"].lower() == "plateau":
-                # learning rate scheduler
-                self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer=self.optimizer,
-                    mode=scheduler_mode,
-                    verbose=False,
-                    threshold_mode='abs',
-                    factor=train_config.get("decrease_factor", 0.1),
-                    patience=train_config.get("patience", 10))
+                if model.regulator is not None:
+                    # 2 schedulers
+                    self.scheduler = {
+                    k: torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=v,
+                        mode=scheduler_mode,
+                        verbose=False,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
+                    for k, v in sorted(self.optimizer.items())}
+                else:
+                    # learning rate scheduler
+                    self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        optimizer=self.optimizer,
+                        mode=scheduler_mode,
+                        verbose=False,
+                        threshold_mode='abs',
+                        factor=train_config.get("decrease_factor", 0.1),
+                        patience=train_config.get("patience", 10))
             elif train_config["scheduling"].lower() == "decaying":
-                self.scheduler = torch.optim.lr_scheduler.StepLR(
-                    optimizer=self.optimizer,
-                    step_size=train_config.get("decaying_step_size", 10))
+                if model.regulator is not None:
+                    # 2 schedulers
+                    self.scheduler = {k: torch.optim.lr_scheduler.StepLR(
+                        optimizer=v,
+                        step_size=train_config.get("decaying_step_size",
+                                                   10))
+                                      for k, v in
+                                      sorted(self.optimizer.items())}
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.StepLR(
+                        optimizer=self.optimizer,
+                        step_size=train_config.get("decaying_step_size",
+                                                   10))
             elif train_config["scheduling"].lower() == "exponential":
-                self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                    optimizer=self.optimizer,
-                    gamma=train_config.get("decrease_factor", 0.99)
-                )
+                if model.regulator is not None:
+                    # 2 schedulers
+                    self.scheduler = {
+                    k: torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=v,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    ) for k, v in sorted(self.optimizer.items())}
+                else:
+                    self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                        optimizer=self.optimizer,
+                        gamma=train_config.get("decrease_factor", 0.99)
+                    )
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
+        self.valid_batch_size = train_config.get("valid_batch_size",
+                                                 self.batch_size)
         self.batch_multiplier = train_config.get("batch_multiplier", 1)
         self.criterion = criterion
         self.normalization = train_config.get("normalization", "batch")
@@ -95,9 +186,6 @@ class TrainManager:
         self.stop = False
         self.total_tokens = 0
         self.max_output_length = train_config.get("max_output_length", None)
-        self.overwrite = train_config.get("overwrite", False)
-        self.model_dir = self._make_model_dir(train_config["model_dir"])
-        self.logger = self._make_logger()
         self.valid_report_file = "{}/validations.txt".format(self.model_dir)
         self.use_cuda = train_config["use_cuda"]
         if self.use_cuda:
@@ -132,6 +220,20 @@ class TrainManager:
         self.logger.info("Trainable parameters: {}".format(trainable_params))
         assert len(trainable_params) > 0
 
+        # statistics for regulation
+        # TODO load them from previous model
+        self.regulator_outputs = []
+        self.budget = train_config.get("budget", 0)
+        self.initial_budget = self.budget
+        self.baseline = train_config.get("baseline", False)
+        self.entropy_regularizer = train_config.get("entropy_regularizer", 0)
+        self.cost_weight = train_config.get("cost_weight", 0.5)
+        assert 1 > self.cost_weight > 0
+        self.logger.info("Initial budget: {}".format(self.budget))
+        self.rewards = []
+        self.costs = []
+
+
     def save_checkpoint(self):
         """
         Save the model's current parameters and state to a checkpoint.
@@ -144,11 +246,19 @@ class TrainManager:
             "total_tokens": self.total_tokens,
             "best_ckpt_score": self.best_ckpt_score,
             "best_ckpt_iteration": self.best_ckpt_iteration,
-            "model_state": self.model.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
-            "scheduler_state": self.scheduler.state_dict() if \
-            self.scheduler is not None else None,
+            "model_state": self.model.state_dict()
         }
+        if type(self.optimizer) is not dict:
+            state["optimizer_state"] = self.optimizer.state_dict()
+            state["scheduler_state"] = self.scheduler.state_dict() if \
+                self.scheduler is not None else None
+        else:
+            for k, v in sorted(self.optimizer.items()):
+                state["{}_optimizer_state".format(k)] = v.state_dict()
+            for k, v in sorted(self.scheduler.items()):
+                state["{}_scheduler_state".format(k)] = v.state_dict()
+                # if self.scheduler is not None else None,
+
         torch.save(state, model_path)
 
     def load_checkpoint(self, path):
@@ -163,9 +273,22 @@ class TrainManager:
 
         # restore model and optimizer parameters
         self.model.load_state_dict(model_checkpoint["model_state"])
-        self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
 
-        if model_checkpoint["scheduler_state"] is not None:
+        # restore optimizer parameters
+        if type(self.optimizer) == dict:
+            self.optimizer["mt"].load_state_dict(
+                model_checkpoint["mt_optimizer_state"])
+            self.optimizer["regulator"].load_state_dict(
+                model_checkpoint["regulator_optimizer_state"])
+        else:
+            self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
+
+        if type(self.scheduler) == dict:
+            self.scheduler["mt"].load_state_dict(
+                model_checkpoint["mt_scheduler_state"])
+            self.scheduler["regulator"].load_state_dict(
+                model_checkpoint["regulator_scheduler_state"])
+        else:
             self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
 
         # restore counts
@@ -241,9 +364,58 @@ class TrainManager:
                 # see https://medium.com/@davidlmorton/increasing-mini-batch-size-without-increasing-memory-6794e10db672
                 update = count == 0
                 # print(count, update, self.steps)
-                batch_loss = self._train_batch(batch, update=update)
+                batch_loss, reg_log_probs, reg_pred = \
+                    self._train_batch_mt(batch, update=update)
+
+                reg_batch_loss = 0
+                if self.loss_weights["regulator"] > 0:
+                    # TODO validate in every step -> set valid_freq to 1., but then don't do it twice
+                    # TODO what's the validation criterion? instead of BLEU could be regret
+                    # TODO store if new best
+                    with torch.no_grad():
+                        valid_score_immediate, valid_loss_immediate, \
+                        valid_ppl_immediate, _, \
+                        _, _, _, \
+                        _, _ = \
+                            validate_on_data(
+                                batch_size=self.valid_batch_size, data=valid_data,
+                                eval_metric=self.eval_metric,
+                                level=self.level, model=self.model,
+                                use_cuda=self.use_cuda,
+                                max_output_length=self.max_output_length,
+                                # but without running train input again
+                                criterion=None)
+                    print("reward", valid_score_immediate)
+                    reward = valid_score_immediate/100
+                    self.rewards.append(reward)
+
+                    self.model.train()
+                    # use validation result to update regulator
+                    if self.baseline:
+                        # TODO either mean
+                        #baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
+                        # TODO or previous
+                        num_previous = len(self.rewards)-1
+                       # baseline_reward = self.rewards[-2] if num_previous > 0 else 0
+                        # TODO or first
+                        # TODO mean of previous x
+                        window_size = 5
+                        baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
+
+                        print(self.rewards)
+                        #print("baseline", baseline_reward)
+                        reward -= baseline_reward
+                        #print("reward with baseline", reward)
+
+                    #print("final reward", reward)
+                    reg_batch_loss, entropy = self._train_batch_regulator(
+                        regulator_log_probs=reg_log_probs, regulator_pred=reg_pred,
+                        reward=reward, update=update)
+                #print("reg batch loss", reg_batch_loss)
+
                 count = self.batch_multiplier if update else count
                 count -= 1
+
 
                 # log learning progress
                 if self.model.training and self.steps % self.logging_freq == 0 \
@@ -251,9 +423,11 @@ class TrainManager:
                     elapsed = time.time() - start - total_valid_duration
                     elapsed_tokens = self.total_tokens - processed_tokens
                     self.logger.info(
-                        "Epoch %d Step: %d Loss: %f Tokens per Sec: %f" %
-                        (epoch_no + 1, self.steps, batch_loss,
-                         elapsed_tokens / elapsed))
+                        "Epoch {} Step: {} MT Loss: {} Reg Loss: {} Reg Entropy: {} "
+                        "Tokens per Sec: {}".format(
+                            epoch_no + 1, self.steps, batch_loss, reg_batch_loss,
+                            entropy,
+                            elapsed_tokens / elapsed))
                     start = time.time()
                     total_valid_duration = 0
 
@@ -265,7 +439,7 @@ class TrainManager:
                         valid_sources_raw, valid_references, valid_hypotheses, \
                         valid_hypotheses_raw, valid_attention_scores = \
                         validate_on_data(
-                            batch_size=self.batch_size, data=valid_data,
+                            batch_size=self.valid_batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
@@ -299,9 +473,19 @@ class TrainManager:
                     else:
                         # schedule based on evaluation score
                         schedule_score = valid_score
-                    if self.scheduler is not None:
-                        self.scheduler.step(schedule_score)
 
+                    if self.scheduler is not None:
+                        if type(self.scheduler) is dict:
+                            # corrector is scheduled after eval metric
+                            # TODO schedule lr after smth else?
+                            if self.loss_weights["regulator"] > 0:
+                                self.scheduler["regulator"].step(
+                                    valid_score)
+                            if self.loss_weights["mt"] > 0:
+                                # make scheduler step for MT model
+                                self.scheduler["mt"].step(schedule_score)
+                        else:
+                            self.scheduler.step(schedule_score)
                     # append to validation report
                     self._add_report(
                         valid_score=valid_score, valid_loss=valid_loss,
@@ -344,12 +528,19 @@ class TrainManager:
                                               self.model_dir,
                                               self.steps))
 
+            # TODO fix stopping! when budget is consumed
                 if self.stop:
+                    # self.logger.info(
+                    #    'Training ended since minimum lr {} was reached.'.format(
+                    #        self.learning_rate_min))
+                    self.logger.info("Training ended.")
                     break
+
             if self.stop:
-                self.logger.info(
-                    'Training ended since minimum lr {} was reached.'.format(
-                        self.learning_rate_min))
+                #self.logger.info(
+                #    'Training ended since minimum lr {} was reached.'.format(
+                #        self.learning_rate_min))
+                self.logger.info("Training ended.")
                 break
         else:
             self.logger.info('Training ended after {} epochs.'.format(
@@ -357,7 +548,7 @@ class TrainManager:
         self.logger.info('Best validation result at step {}: {} {}.'.format(
             self.best_ckpt_iteration, self.best_ckpt_score, self.ckpt_metric))
 
-    def _train_batch(self, batch, update=True):
+    def _train_batch_mt(self, batch, update=True):
         """
         Train the model on one batch: Compute the loss, make a gradient step.
 
@@ -365,8 +556,11 @@ class TrainManager:
         :param update: if False, only store gradient. if True also make update
         :return:
         """
-        batch_loss = self.model.get_loss_for_batch(
-            batch=batch, criterion=self.criterion)
+        # only run regulator if its loss is > 0
+        batch_loss, regulator_out, regulator_pred = \
+            self.model.get_loss_for_batch(
+                batch=batch, criterion=self.criterion,
+                regulate=self.loss_weights["regulator"] > 0)
 
         # normalize batch loss
         if self.normalization == "batch":
@@ -380,8 +574,18 @@ class TrainManager:
         # division needed since loss.backward sums the gradients until updated
         norm_batch_multiply = norm_batch_loss / self.batch_multiplier
 
-        # compute gradients
-        norm_batch_multiply.backward()
+        norm_batch_multiply = self.loss_weights["mt"] * norm_batch_multiply
+
+        if not all(["regulator" in p for p in self.trainable_params]) and \
+                        self.loss_weights["mt"] > 0.:
+            # compute gradient
+            norm_batch_multiply.backward(retain_graph=True)
+
+        # gradients for regulator parameters should be zero
+        assert not any(["reg" in k for k,v in self.model.named_parameters()
+                        if v.grad is not None and torch.norm(v.grad) > 0])
+
+        # only update MT params
 
         if self.clip_grad_fun is not None:
             # clip gradients (in-place)
@@ -389,8 +593,22 @@ class TrainManager:
 
         if update:
             # make gradient step
-            self.optimizer.step()
-            self.optimizer.zero_grad()
+            if type(self.optimizer) is dict:
+                # two optimizers with 2 different learning rates
+                if self.loss_weights["mt"] > 0:
+                    self.optimizer["mt"].step()
+                    self.optimizer["mt"].zero_grad()
+               # if self.loss_weights["regulator"] > 0:
+               #     self.optimizer["regulator"].step()
+               #     for name, param in self.corrector_params.items():
+               #         if param.requires_grad:
+               #             # set the gradients back to zero
+               #             param.grad = param.grad.detach()
+               #             param.grad.zero_()
+               #             # self.optimizer["corrector"].zero_grad()
+            else:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
             # increment step counter
             self.steps += 1
@@ -398,7 +616,95 @@ class TrainManager:
         # increment token counter
         self.total_tokens += batch.ntokens
 
-        return norm_batch_loss
+        return norm_batch_loss, regulator_out, regulator_pred
+
+    def _train_batch_regulator(self, regulator_log_probs, regulator_pred, reward, update=True):
+        # regulator_log_prob*(reward-cost)
+        # compute cost
+        # TODO include budget?
+        costs = self.model.regulator.get_costs(regulator_pred.detach().numpy())
+        # select correct part of log probs with nll
+        #print("reg log prob", regulator_log_probs)
+        nll = self.criterion(input=regulator_log_probs.view(regulator_pred.size(0), -1), target=regulator_pred)
+        # TODO fix cost
+        print("costs", costs)  # batch_size
+        print(self.budget)
+        budget_used = 1-(self.budget/max(self.initial_budget, 1))
+        print("budget used", budget_used)
+        # cost is scaled by budget percentage that is already used
+        # the smaller the remaining budget, the more grows the cost
+        budgeted_costs = costs*(1+budget_used)
+        print("cost with budget", budgeted_costs)
+        #print("nll", nll)
+        #print("logprob", regulator_log_probs)
+        # TODO introduce parameter for interpolation
+        trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
+        print("trade_off", trade_off)
+
+        reg_loss = torch.mul(nll, regulator_log_probs.new(trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
+        #print("loss", reg_loss) # batch_size
+
+        entropy = 0
+        if self.entropy_regularizer > 0:
+            entropy = -torch.mul(torch.exp(regulator_log_probs),
+                                 regulator_log_probs).sum(1)  # batch_size
+           # print("entropy", entropy)
+            reg_loss -= self.entropy_regularizer*entropy
+
+        # average over batch
+        norm_batch_loss = reg_loss.mean(0)
+        #print("norm_batch loss", norm_batch_loss)
+
+        # division needed since loss.backward sums the gradients until updated
+        norm_batch_multiply = norm_batch_loss / self.batch_multiplier
+
+        norm_batch_multiply = self.loss_weights["regulator"] * norm_batch_multiply
+
+        if any(["regulator" in p for p in self.trainable_params]) and \
+                        self.loss_weights["regulator"] > 0.:
+            # compute gradient
+            norm_batch_multiply.backward() # retain_graph=True
+
+        # gradients for regulator parameters should be zero
+        #assert not any(["reg" in k for k, v in self.model.named_parameters()
+        #                if v.grad is not None and torch.norm(v.grad) > 0])
+        #print("reg grads",
+        #      [(k, torch.norm(v.grad) if v.grad is not None else None) for k,v in self.model.named_parameters()])
+
+        # only update regulator params
+
+        if self.clip_grad_fun is not None:
+            # clip gradients (in-place)
+            self.clip_grad_fun(params=self.model.parameters())
+
+        if update:
+            # make gradient step
+            if type(self.optimizer) is dict:
+                # two optimizers with 2 different learning rates
+                if self.loss_weights["regulator"] > 0:
+                    self.optimizer["regulator"].step()
+                    self.optimizer["regulator"].zero_grad()
+                    # if self.loss_weights["regulator"] > 0:
+                    #     self.optimizer["regulator"].step()
+                    #     for name, param in self.corrector_params.items():
+                    #         if param.requires_grad:
+                    #             # set the gradients back to zero
+                    #             param.grad = param.grad.detach()
+                    #             param.grad.zero_()
+                    #             # self.optimizer["corrector"].zero_grad()
+            else:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+
+        self.costs.append(costs)
+        self.regulator_outputs.append(regulator_pred.detach().numpy())
+        self.budget -= sum(costs)
+        # TODO this is not exact
+        if self.budget < 0:
+            self.stop = True
+            self.logger.info("Training ended since budget is consumed.")
+
+        return norm_batch_loss, entropy.sum()
 
     def _add_report(self, valid_score, valid_ppl, valid_loss, eval_metric,
                     new_best=False):
@@ -413,19 +719,41 @@ class TrainManager:
         :return:
         """
         current_lr = -1
-        # ignores other param groups for now
-        for param_group in self.optimizer.param_groups:
-            current_lr = param_group['lr']
+        if type(self.optimizer) is dict:
+            current_lr = {k: v.param_groups[0]["lr"] for
+                          k, v in sorted(self.optimizer.items())}
 
-        if current_lr < self.learning_rate_min:
-            self.stop = True
+        else:        # ignores other param groups for now
+            for param_group in self.optimizer.param_groups:
+                current_lr = param_group['lr']
+
+        if type(current_lr) is dict:
+            # TODO adapt to regulator
+            # only stop if all learning rates have reached minimum
+            self.stop = all(
+                [v < self.learning_rate_min for v in current_lr.values()])
+        else:
+            if current_lr < self.learning_rate_min:
+                self.stop = True
+
+        report_str = "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\tMT-{}: {:.5f}\t" \
+                     "MT-sBLEU: {:.5f}".format(
+            self.steps, valid_loss, valid_ppl, eval_metric,
+            valid_score, valid_score)
+
+        if self.loss_weights["regulator"] > 0:
+            # add statistics
+            report_str += "\t Avg_Reward: {}".format(np.mean(self.rewards))
+            report_str += "\t Budget: {}".format(self.budget)
+
+
+        # at the end add * and lr
+        report_str += "\t LR: {}\t{}\n".format(current_lr,
+                                               "*" if new_best else "")
+
 
         with open(self.valid_report_file, 'a') as opened_file:
-            opened_file.write(
-                "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\t{}: {:.5f}\t"
-                "LR: {:.8f}\t{}\n".format(
-                    self.steps, valid_loss, valid_ppl, eval_metric,
-                    valid_score, current_lr, "*" if new_best else ""))
+            opened_file.write(report_str)
 
     def store_outputs(self, hypotheses):
         """
@@ -497,7 +825,7 @@ def train(cfg_file):
 
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
         hypotheses_raw, attention_scores  = validate_on_data(
-            data=test_data, batch_size=trainer.batch_size,
+            data=test_data, batch_size=trainer.valid_batch_size,
             eval_metric=trainer.eval_metric, level=trainer.level,
             max_output_length=trainer.max_output_length,
             model=model, use_cuda=trainer.use_cuda, criterion=None,

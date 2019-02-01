@@ -41,9 +41,9 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
 
         # greedy decoding: choose arg max over vocabulary in each step
         next_word = torch.argmax(out, dim=-1)  # batch x time=1
-        output.append(next_word.squeeze(1).cpu().numpy())
+        output.append(next_word.squeeze(1).detach().cpu().numpy())
         prev_y = next_word
-        attention_scores.append(att_probs.squeeze(1).cpu().numpy())
+        attention_scores.append(att_probs.squeeze(1).detach().cpu().numpy())
         # batch, max_src_lengths
     stacked_output = np.stack(output, axis=1)  # batch, time
     stacked_attention_scores = np.stack(attention_scores, axis=1)

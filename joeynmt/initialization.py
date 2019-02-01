@@ -121,6 +121,10 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
     with torch.no_grad():
         for name, p in model.named_parameters():
 
+            # initialize output layer uniformly
+            if "regulator.output_layer.weight" in name:
+                nn.init.uniform_(p, a=-0.001, b=0.001)
+
             if "embed" in name:
                 embed_init_fn_(p)
 
