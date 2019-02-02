@@ -370,8 +370,10 @@ class TrainManager:
 
                # print("regulator prediction", reg_pred)
 
-
-                self.regulator_outputs.extend(reg_pred.detach().numpy())
+                if reg_pred is not None:
+                    self.regulator_outputs.extend(reg_pred.detach().numpy())
+                else:
+                    entropy = None
                 # TODO this is not exact
                 if self.budget < 0:
                     self.stop = True
