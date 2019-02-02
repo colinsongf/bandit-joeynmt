@@ -284,8 +284,8 @@ class Model(nn.Module):
                 reg_pred = torch.from_numpy(np.full(shape=(batch_size), fill_value=fill_value)).to(regulator_out.device).long()
             #print("regulator prediction", reg_pred)
 
-            one_hot_reg_pred = torch.eye(
-                self.regulator.output_size).index_select(dim=0, index=reg_pred)
+            #one_hot_reg_pred = torch.eye(
+            #    self.regulator.output_size).index_select(dim=0, index=reg_pred)
             #print("one hot", one_hot_reg_pred)
 
             # now decide which loss counts for which batch
@@ -300,9 +300,8 @@ class Model(nn.Module):
             # need a matrix with
             # [none, self, chunk, post, ]-losses
             # TODO is none_loss enough to not make an update? no -> fix!
-            none_loss = self_sup_loss.new_zeros(size=(batch_size,))
-            # TODO make sure order is correct
-            all_losses = torch.stack([none_loss, self_sup_loss, chunk_loss, pe_loss], dim=1)
+            #none_loss = self_sup_loss.new_zeros(size=(batch_size,))
+            #all_losses = torch.stack([none_loss, self_sup_loss, chunk_loss, pe_loss], dim=1)
             #print("all losses", all_losses)
             # masking out those losses that were not chosen for batch
             #batch_loss = (one_hot_reg_pred.detach()*all_losses).sum(1)
