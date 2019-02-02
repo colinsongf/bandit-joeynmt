@@ -237,16 +237,28 @@ class Model(nn.Module):
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
             # 1 if correct, 0 if incorrect
             # fill bs_hyp with padding, since different length
-            markings = np.array([bs_hyp_pad == trg_np], dtype=float)
+            #print("bs", bs_hyp_pad)
+            #print("trg", trg_np)
+            # TODO should padding area be zeros?
+            markings = np.zeros_like(bs_hyp_pad, dtype=float)
+            for i, row in enumerate(bs_hyp):
+                for j, val in enumerate(row):
+                    try:
+                        if trg_np[i,j] == val:
+                            markings[i,j] = 1.
+                    except IndexError: # BS is longer than trg
+                            continue
+            #markings = np.array([bs_hyp_pad == trg_np], dtype=float)
             bs_target = batch.trg.new(bs_hyp_pad).long()
            # print("trg", batch.trg.detach().numpy())
-           # print("markings", markings)
+            #print("markings", markings)
             # no need to add trg mask -> padding is masked automatically
             #print("bs log probs", bs_log_probs.shape)
             bs_nll = criterion(
                 input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
                 target=bs_target.view(-1))
             #print("bs nll", bs_nll)
+            #print("markings", markings)
             # bs hyp might not have the same length as tf seq
             # TODO prevent model from preferring shorter ones
             chunk_loss = bs_nll*batch.trg.new(markings).float().view(-1)
@@ -272,8 +284,7 @@ class Model(nn.Module):
             reg_pred = reg_dist.sample()
             #print("regulator prediction", reg_pred)
 
-            # TODO test: always choose one type of supervision
-            # TODO fix ahcunk based
+            # heuristic: always choose one type of supervision
             if pred is not False:
                 if pred == "random":
                     # random choice
