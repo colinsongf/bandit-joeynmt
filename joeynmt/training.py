@@ -45,8 +45,7 @@ class TrainManager:
         if train_config["loss"].lower() not in ["crossentropy", "xent",
                                                 "mle", "cross-entropy"]:
             raise NotImplementedError("Loss is not implemented. Only xent.")
-        learning_rate = train_config.get("learning_rate", 3.0e-4)
-        print("LEARNING RATE", learning_rate)
+        self.learning_rate = train_config.get("learning_rate", 3.0e-4)
         weight_decay = train_config.get("weight_decay", 0)
 
         if model.regulator is not None:
@@ -80,28 +79,28 @@ class TrainManager:
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer["mt"] = torch.optim.Adam(
                     self.mt_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate["mt"])
+                    lr=self.learning_rate["mt"])
                 self.optimizer["regulator"] = torch.optim.Adam(
                     self.regulator_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate["regulator"])
+                    lr=self.learning_rate["regulator"])
             else:
                 # default
                 self.optimizer["mt"] = torch.optim.SGD(
                     self.mt_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate["mt"])
+                    lr=self.learning_rate["mt"])
                 self.optimizer["regulator"] = torch.optim.SGD(
                     self.regulator_params.values(), weight_decay=weight_decay,
-                    lr=learning_rate["regulator"])
+                    lr=self.learning_rate["regulator"])
         else:
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer = torch.optim.Adam(
                     model.parameters(), weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=self.learning_rate)
             else:
                 # default
                 self.optimizer = torch.optim.SGD(
                     model.parameters(), weight_decay=weight_decay,
-                    lr=learning_rate)
+                    lr=self.learning_rate)
 
         self.schedule_metric = train_config.get("schedule_metric",
                                                 "eval_metric")
@@ -277,10 +276,22 @@ class TrainManager:
 
         # restore optimizer parameters
         if type(self.optimizer) == dict:
+            print(self.optimizer)
             self.optimizer["mt"].load_state_dict(
                 model_checkpoint["mt_optimizer_state"])
             self.optimizer["regulator"].load_state_dict(
                 model_checkpoint["regulator_optimizer_state"])
+            # overwrite learning rates
+            for o_name, o in self.optimizer.items():
+                for i, param_group in enumerate(o.param_groups):
+                    old_lr = float(param_group['lr'])
+                    new_lr = self.learning_rate[o_name]
+                    if old_lr != new_lr:
+                        param_group['lr'] = new_lr
+                        self.logger.info(
+                            'Optimizer for {}: Overwriting learning rate'
+                            ' of group {} from {:.4e} to {:.4e}.'.format(
+                                o_name, i, old_lr, new_lr))
         else:
             self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
 
