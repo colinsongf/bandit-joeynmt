@@ -52,7 +52,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # run as during training with teacher forcing
             if criterion is not None and batch.trg is not None:
                 batch_loss, reg_log_probs, reg_pred = model.get_loss_for_batch(
-                    batch, criterion=criterion)
+                    batch, criterion=criterion, max_output_length=max_output_length)
                 total_loss += batch_loss
                 total_ntokens += batch.ntokens
 

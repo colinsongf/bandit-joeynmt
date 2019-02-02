@@ -609,7 +609,8 @@ class TrainManager:
         batch_loss, regulator_out, regulator_pred = \
             self.model.get_loss_for_batch(
                 batch=batch, criterion=self.criterion,
-                regulate=self.loss_weights["regulator"] > 0, pred=pred)
+                regulate=self.loss_weights["regulator"] > 0, pred=pred,
+                max_output_length=self.max_output_length)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch

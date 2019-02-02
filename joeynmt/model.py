@@ -160,17 +160,17 @@ class Model(nn.Module):
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
 
-    def regulate(self, src, hyp):
+    def regulate(self, src): #, hyp):
         """
 
         :param src:
         :param hyp:
         :return:
         """
-        return self.regulator(src=self.reg_src_embed(src),
-                              hyp=self.reg_trg_embed(hyp))
+        return self.regulator(src=self.reg_src_embed(src))
+                             # hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False):
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -197,8 +197,7 @@ class Model(nn.Module):
         if regulate:
 
             # compute outputs that are presented to user (BS)
-            # TODO make param
-            max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
+           # max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
             beam_size = 10
             beam_alpha = 1.0
             bs_hyp, _ = beam_search(size=beam_size, encoder_output=encoder_out,
@@ -262,7 +261,7 @@ class Model(nn.Module):
             assert self_sup_loss.size(0) == batch_size
             #print("self sup loss", self_sup_loss)
 
-            regulator_out = self.regulate(batch.src, bs_target)
+            regulator_out = self.regulate(batch.src) #bs_target)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
 
             #print("reg_log_probs", reg_log_probs.shape)
