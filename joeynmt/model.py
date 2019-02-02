@@ -170,7 +170,7 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src),
                               hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False):
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -178,7 +178,6 @@ class Model(nn.Module):
         :param criterion:
         :return:
         """
-        # TODO keep track of general statistics and budget
         encoder_out, encoder_hidden, decoder_out = \
             self.forward(src=batch.src, trg_input=batch.trg_input,
                          src_mask=batch.src_mask, src_lengths=batch.src_lengths)
@@ -274,8 +273,15 @@ class Model(nn.Module):
             reg_pred = reg_dist.sample()
             #print("regulator prediction", reg_pred)
 
-            # TODO test: always choose full supervision
-            #reg_pred = torch.from_numpy(np.full(shape=(batch_size), fill_value=0)).to(regulator_out.device).long()
+            # TODO test: always choose one type of supervision
+            # TODO fix ahcunk based
+            if pred is not False:
+                if pred == "random":
+                    # random choice
+                    fill_value = np.random.randint(0, 4, size=batch_size)
+                else:
+                    fill_value = pred
+                reg_pred = torch.from_numpy(np.full(shape=(batch_size), fill_value=fill_value)).to(regulator_out.device).long()
             #print("regulator prediction", reg_pred)
 
             one_hot_reg_pred = torch.eye(
@@ -289,22 +295,37 @@ class Model(nn.Module):
             # which one is more expensive?
             # probably option 1
             # -> regulator predicts one-hot weighting of losses for each input
-            print("regulator pred", one_hot_reg_pred.detach().numpy())
+            #print("regulator pred", one_hot_reg_pred.detach().numpy())
 
             # need a matrix with
             # [none, self, chunk, post, ]-losses
-            # TODO is none_loss enough to not make an update?
+            # TODO is none_loss enough to not make an update? no -> fix!
             none_loss = self_sup_loss.new_zeros(size=(batch_size,))
             # TODO make sure order is correct
             all_losses = torch.stack([none_loss, self_sup_loss, chunk_loss, pe_loss], dim=1)
             #print("all losses", all_losses)
             # masking out those losses that were not chosen for batch
-            batch_loss = (one_hot_reg_pred.detach()*all_losses).sum(1)
+            #batch_loss = (one_hot_reg_pred.detach()*all_losses).sum(1)
+            batch_loss = 0
             # TODO check if losses balanced? norm needed? avg over batch?
+            # TODO rather loop over loss and sum
+            for i, p in enumerate(reg_pred):
+                if p==0:
+                    continue
+                elif p==1:
+                    batch_loss += self_sup_loss[i]
+                elif p==2:
+                    batch_loss += chunk_loss[i]
+                elif p==3:
+                    batch_loss += pe_loss[i]
+            if type(batch_loss) == int:
+                print("NO LOSS")
+                batch_loss = None
         else:
             batch_loss = pe_loss.sum(0)  # with regulator summing is not done within criterion
             reg_log_probs = None
             reg_pred = None
+
 
         return batch_loss, reg_log_probs, reg_pred
 

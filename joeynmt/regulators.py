@@ -32,6 +32,7 @@ class Regulator(nn.Module):
         #print("HERE")
         #print("pred", pred)
         # TODO make more sophisticated
+        cost_dict = {0: 0, 1: 0, 2: 0.5, 3: 1}
         # one cost for every prediction
         total_cost = 0
         #for p in pred:
@@ -43,9 +44,10 @@ class Regulator(nn.Module):
         #        total_cost += 2
         #    elif p == 3:
         #        total_cost += 3
-        max_cost = 3
-        total_cost = pred/max_cost
-        print("total cost", total_cost)
+        total_cost = np.array([cost_dict[p] for p in pred])
+        #max_cost = 3
+        #total_cost = pred/max_cost
+        #print("total cost", total_cost)
         # what's the cost for each type of feedback?
         # no update: no cost
         # weak feedback: accuracy
@@ -60,6 +62,7 @@ class RecurrentRegulator(Regulator):
     Recurrent regulator model that predicts a feedback mode
     """
 
+    # TODO use only src
     def __init__(self,
                  output_size,
                  type,
