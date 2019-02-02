@@ -271,7 +271,12 @@ class Model(nn.Module):
             # sum over time dimension
             self_sup_loss = bs_nll.view(batch_size, -1).sum(-1)  # batch
             assert self_sup_loss.size(0) == batch_size
-            #print("self sup loss", self_sup_loss)
+            print("self sup loss", self_sup_loss)
+            # weigh by confidence = mean(prob(sample))
+            confidence = torch.exp(-bs_nll.view(batch_size, -1).mean(-1))
+            print("conf", confidence)
+            self_sup_loss = self_sup_loss*confidence
+            print("weighted", self_sup_loss)
 
             regulator_out = self.regulate(batch.src, bs_target)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
