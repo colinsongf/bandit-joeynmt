@@ -210,7 +210,7 @@ class Model(nn.Module):
                                 decoder=self.decoder)
 
             # padded beam search target
-            trg_np = batch.trg.detach().numpy()
+            trg_np = batch.trg.detach().cpu().numpy()
             #print("bs hyp", bs_hyp)
             bs_hyp_pad = np.full(shape=(batch_size,max_output_length),
                                  fill_value=self.pad_index)

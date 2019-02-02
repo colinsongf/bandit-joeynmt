@@ -63,6 +63,7 @@ class RecurrentRegulator(Regulator):
     """
 
     # TODO use only src
+    # TODO use max pool to make interpretable?
     def __init__(self,
                  output_size,
                  type,

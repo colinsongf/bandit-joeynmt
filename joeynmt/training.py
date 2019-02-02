@@ -371,7 +371,7 @@ class TrainManager:
                # print("regulator prediction", reg_pred)
 
                 if reg_pred is not None:
-                    self.regulator_outputs.extend(reg_pred.detach().numpy())
+                    self.regulator_outputs.extend(reg_pred.detach().cpu().numpy())
                 else:
                     entropy = None
                 # TODO this is not exact
@@ -676,7 +676,7 @@ class TrainManager:
         # regulator_log_prob*(reward-cost)
         # compute cost
         # TODO include budget?
-        costs = self.model.regulator.get_costs(regulator_pred.detach().numpy())
+        costs = self.model.regulator.get_costs(regulator_pred.detach().cpu().numpy())
         # select correct part of log probs with nll
         #print("reg log prob", regulator_log_probs)
         nll = self.criterion(input=regulator_log_probs.view(regulator_pred.size(0), -1), target=regulator_pred)
