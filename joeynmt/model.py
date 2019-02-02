@@ -315,34 +315,43 @@ class Model(nn.Module):
 
             # need a matrix with
             # [none, self, chunk, post, ]-losses
-            # TODO is none_loss enough to not make an update? no -> fix!
             #none_loss = self_sup_loss.new_zeros(size=(batch_size,))
             #all_losses = torch.stack([none_loss, self_sup_loss, chunk_loss, pe_loss], dim=1)
             #print("all losses", all_losses)
             # masking out those losses that were not chosen for batch
             #batch_loss = (one_hot_reg_pred.detach()*all_losses).sum(1)
             batch_loss = 0
+            batch_tokens = 0
+            batch_seqs = 0
             # TODO check if losses balanced? norm needed? avg over batch?
             # TODO rather loop over loss and sum
+            #print(reg_pred)
             for i, p in enumerate(reg_pred):
-                if p==0:
+                if p == 0:
                     continue
-                elif p==1:
+                elif p == 1:
                     batch_loss += self_sup_loss[i]
-                elif p==2:
+                    batch_tokens += bs_hyp[i].size
+                    batch_seqs += 1
+                elif p == 2:
                     batch_loss += chunk_loss[i]
-                elif p==3:
+                    batch_seqs += 1
+                    batch_tokens += markings[i].sum()
+                elif p == 3:
                     batch_loss += pe_loss[i]
+                    batch_seqs += 1
+                    batch_tokens += (batch.trg[i] != self.pad_index).sum().cpu().numpy()
             if type(batch_loss) == int:
-                print("NO LOSS")
                 batch_loss = None
+            #print(batch_tokens, batch_seqs, batch.ntokens, batch.nseqs)
         else:
             batch_loss = pe_loss.sum(0)  # with regulator summing is not done within criterion
             reg_log_probs = None
             reg_pred = None
+            batch_tokens = batch.ntokens
+            batch_seqs = batch.nseqs
 
-
-        return batch_loss, reg_log_probs, reg_pred
+        return batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """

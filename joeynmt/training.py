@@ -627,7 +627,7 @@ class TrainManager:
         :return:
         """
         # only run regulator if its loss is > 0
-        batch_loss, regulator_out, regulator_pred = \
+        batch_loss, regulator_out, regulator_pred, batch_tokens, batch_seqs = \
             self.model.get_loss_for_batch(
                 batch=batch, criterion=self.criterion,
                 regulate=self.loss_weights["regulator"] > 0, pred=pred,
@@ -639,10 +639,11 @@ class TrainManager:
             return None, regulator_out, regulator_pred
 
         # normalize batch loss
+        # counts might be adapted since parts of batch are ignored through reg. choice
         if self.normalization == "batch":
-            normalizer = batch.nseqs
+            normalizer = batch_seqs
         elif self.normalization == "tokens":
-            normalizer = batch.ntokens
+            normalizer = batch_tokens
         else:
             raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
