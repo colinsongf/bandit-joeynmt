@@ -275,7 +275,7 @@ class Model(nn.Module):
             # weigh by confidence = mean(prob(sample))
             confidence = torch.exp(-bs_nll.view(batch_size, -1).mean(-1))
             print("conf", confidence)
-            self_sup_loss = self_sup_loss*confidence
+            self_sup_loss = self_sup_loss*confidence.detach()
             print("weighted", self_sup_loss)
 
             regulator_out = self.regulate(batch.src, bs_target)
