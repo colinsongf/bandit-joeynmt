@@ -122,6 +122,7 @@ class TrainManager:
             self.best_ckpt_score = np.inf
             self.is_best = lambda x: x < self.best_ckpt_score
         self.scheduler = None
+        self.patience = train_config.get("patience", 10)
         if "scheduling" in train_config.keys() and \
                 train_config["scheduling"]:
             if train_config["scheduling"].lower() == "plateau":
@@ -134,7 +135,7 @@ class TrainManager:
                         verbose=False,
                         threshold_mode='abs',
                         factor=train_config.get("decrease_factor", 0.1),
-                        patience=train_config.get("patience", 10))
+                        patience=self.patience)
                     for k, v in sorted(self.optimizer.items())}
                 else:
                     # learning rate scheduler
@@ -276,7 +277,6 @@ class TrainManager:
 
         # restore optimizer parameters
         if type(self.optimizer) == dict:
-            print(self.optimizer)
             self.optimizer["mt"].load_state_dict(
                 model_checkpoint["mt_optimizer_state"])
             self.optimizer["regulator"].load_state_dict(
@@ -300,6 +300,16 @@ class TrainManager:
                 model_checkpoint["mt_scheduler_state"])
             self.scheduler["regulator"].load_state_dict(
                 model_checkpoint["regulator_scheduler_state"])
+            for s_name, s in self.scheduler.items():
+                new_patience = self.patience
+                old_patience = s.patience
+                if old_patience != new_patience:
+                    s.patience = new_patience
+                    self.logger.info(
+                        'Scheduler for {}: Overwriting patience'
+                        ' from {:.4e} to {:.4e}.'.format(
+                            s_name, old_patience, new_patience))
+            print(self.scheduler["regulator"].patience)
         else:
             self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
 
