@@ -172,7 +172,7 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src),
                               hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word"):
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -298,9 +298,10 @@ class Model(nn.Module):
             #print("self sup loss", self_sup_loss)
             # weigh by confidence = mean(prob(sample))
             #confidence = torch.exp(-bs_nll.view(batch_size, -1).mean(-1))
-            entropy = (-torch.exp(bs_log_probs)*bs_log_probs).sum(-1).mean(1)
-            #print("entropy", entropy)
-            self_sup_loss = self_sup_loss - entropy#*confidence.detach()
+            if entropy:
+                entropy = (-torch.exp(bs_log_probs)*bs_log_probs).sum(-1).mean(1)
+                #print("entropy", entropy)
+                self_sup_loss = self_sup_loss - entropy#*confidence.detach()
             #print("weighted", self_sup_loss)
 
             regulator_out = self.regulate(batch.src, bs_target)

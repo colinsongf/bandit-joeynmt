@@ -53,6 +53,7 @@ training:
     budgeted_cost: False
     only_sup: 2
     chunk_type: "sbleu"  # marking
+    self_entropy: False # encourage high entropy for self-training
 
 model:
     initializer: "xavier"
