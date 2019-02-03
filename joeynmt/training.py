@@ -234,6 +234,9 @@ class TrainManager:
         self.costs = []
         self.budgeted_cost = train_config.get("budgeted_cost", False)
         self.only_sup = train_config.get("only_sup", False)
+        self.chunk_type = train_config.get("chunk_type", "marking")
+        self.logger.info("Learning with feedback of type {}".format(
+            self.chunk_type))
 
     def save_checkpoint(self):
         """
@@ -631,7 +634,8 @@ class TrainManager:
             self.model.get_loss_for_batch(
                 batch=batch, criterion=self.criterion,
                 regulate=self.loss_weights["regulator"] > 0, pred=pred,
-                max_output_length=self.max_output_length)
+                max_output_length=self.max_output_length,
+                chunk_type=self.chunk_type, level=self.level)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch

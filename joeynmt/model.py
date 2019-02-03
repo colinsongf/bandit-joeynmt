@@ -12,6 +12,8 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy
 from joeynmt.vocabulary import Vocabulary
 from torch.distributions import Categorical
+from joeynmt.metrics import sbleu
+from joeynmt.helpers import arrays_to_sentences
 
 
 
@@ -170,7 +172,7 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src),
                               hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100):
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word"):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -234,35 +236,57 @@ class Model(nn.Module):
             #                                 trg_input=batch.trg.new(greedy_hyp).long(),
             #                                 src_mask=batch.src_mask)
 
-            # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
-            # 1 if correct, 0 if incorrect
-            # fill bs_hyp with padding, since different length
-            #print("bs", bs_hyp_pad)
-            #print("trg", trg_np)
-            # TODO should padding area be zeros?
-            markings = np.zeros_like(bs_hyp_pad, dtype=float)
-            for i, row in enumerate(bs_hyp):
-                for j, val in enumerate(row):
-                    try:
-                        if trg_np[i,j] == val:
-                            markings[i,j] = 1.
-                    except IndexError: # BS is longer than trg
-                            continue
-            #markings = np.array([bs_hyp_pad == trg_np], dtype=float)
             bs_target = batch.trg.new(bs_hyp_pad).long()
+
+            bs_nll = criterion(
+                input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
+                target=bs_target.view(-1))
+
+            if chunk_type == "marking":
+                # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
+                # 1 if correct, 0 if incorrect
+                # fill bs_hyp with padding, since different length
+                #print("bs", bs_hyp_pad)
+                #print("trg", trg_np)
+                # padding area is zero
+                markings = np.zeros_like(bs_hyp_pad, dtype=float)
+                for i, row in enumerate(bs_hyp):
+                    for j, val in enumerate(row):
+                        try:
+                            if trg_np[i,j] == val:
+                                markings[i,j] = 1.
+                        except IndexError: # BS is longer than trg
+                                continue
+                chunk_loss = (bs_nll.view(batch_size, -1) * batch.trg.new(
+                    markings).float()).sum(1)
+
+            elif chunk_type == "sbleu":
+                # decode hypothesis and target
+                join_char = " " if level in ["word", "bpe"] else ""
+                bs_hyp_decoded = [join_char.join(t) for t in
+                                  arrays_to_sentences(arrays=bs_hyp,
+                                            vocabulary=self.trg_vocab,
+                                            cut_at_eos=True)]
+                trg_np_decoded = [join_char.join(t) for t in
+                                  arrays_to_sentences(arrays=trg_np,
+                                            vocabulary=self.trg_vocab,
+                                            cut_at_eos=True)]
+                assert len(trg_np_decoded) == len(bs_hyp_decoded)
+                # compute sBLEUs
+                sbleus = np.array(sbleu(bs_hyp_decoded, trg_np_decoded))
+                # use same reward for all the tokens
+                chunk_loss = bs_nll.sum(-1)*(1-batch.trg.new(
+                    sbleus)).float()
+
            # print("trg", batch.trg.detach().numpy())
             #print("markings", markings)
             # no need to add trg mask -> padding is masked automatically
             #print("bs log probs", bs_log_probs.shape)
-            bs_nll = criterion(
-                input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
-                target=bs_target.view(-1))
+
             #print("bs nll", bs_nll)
             #print("markings", markings)
             # bs hyp might not have the same length as tf seq
             # TODO prevent model from preferring shorter ones
-            chunk_loss = bs_nll*batch.trg.new(markings).float().view(-1)
-            chunk_loss = chunk_loss.view(batch_size, -1).sum(-1)
             assert chunk_loss.size(0) == batch_size
             #print("chunk loss", chunk_loss)
 
@@ -336,7 +360,10 @@ class Model(nn.Module):
                 elif p == 2:
                     batch_loss += chunk_loss[i]
                     batch_seqs += 1
-                    batch_tokens += markings[i].sum()
+                    if chunk_type == "marking":
+                        batch_tokens += markings[i].sum()
+                    elif chunk_type == "sbleu":
+                        batch_tokens += bs_hyp[i].size
                 elif p == 3:
                     batch_loss += pe_loss[i]
                     batch_seqs += 1

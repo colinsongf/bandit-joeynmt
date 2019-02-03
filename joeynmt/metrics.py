@@ -28,6 +28,15 @@ def bleu(hypotheses, references):
                     sys_stream=hypotheses,
                     ref_streams=[references]).score
 
+def sbleu(hypotheses, references):
+    sbleus = []
+    assert len(hypotheses) == len(references)
+    for hyp, ref in zip(hypotheses, references):
+        sbleus.append(sacrebleu.raw_corpus_bleu(
+                      sys_stream=[hyp],
+                      ref_streams=[[ref]]).score/100)
+    return sbleus
+
 
 def token_accuracy(hypotheses, references, level="word"):
     """
