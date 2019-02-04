@@ -9,7 +9,7 @@ from joeynmt.encoders import Encoder, RecurrentEncoder
 from joeynmt.decoders import Decoder, RecurrentDecoder
 from joeynmt.regulators import Regulator, RecurrentRegulator
 from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
-from joeynmt.search import beam_search, greedy
+from joeynmt.search import beam_search, greedy, sample
 from joeynmt.vocabulary import Vocabulary
 from torch.distributions import Categorical
 from joeynmt.metrics import sbleu
@@ -174,7 +174,7 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src), src_length=src_length)
                             #  hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False):
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False, search="beam"):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -204,20 +204,35 @@ class Model(nn.Module):
            # max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
             beam_size = 10
             beam_alpha = 1.0
-            bs_hyp, _ = beam_search(size=beam_size, encoder_output=encoder_out,
-                                encoder_hidden=encoder_hidden,
-                                src_mask=batch.src_mask, embed=self.trg_embed,
-                                max_output_length=max_output_length,
-                                alpha=beam_alpha, eos_index=self.eos_index,
-                                pad_index=self.pad_index, bos_index=self.bos_index,
-                                decoder=self.decoder)
+            if search == "greedy":
+                curr_hyp, _ = greedy(encoder_output=encoder_out,
+                                    encoder_hidden=encoder_hidden,
+                                    src_mask=batch.src_mask, embed=self.trg_embed,
+                                    max_output_length=max_output_length,
+                                    bos_index=self.bos_index,
+                                    decoder=self.decoder)
+            elif search == "beam":
+                curr_hyp, _ = beam_search(size=beam_size, encoder_output=encoder_out,
+                                    encoder_hidden=encoder_hidden,
+                                    src_mask=batch.src_mask, embed=self.trg_embed,
+                                    max_output_length=max_output_length,
+                                    alpha=beam_alpha, eos_index=self.eos_index,
+                                    pad_index=self.pad_index, bos_index=self.bos_index,
+                                    decoder=self.decoder)
+            elif search == "sample":
+                curr_hyp, _ = sample(encoder_output=encoder_out,
+                                    encoder_hidden=encoder_hidden,
+                                    src_mask=batch.src_mask, embed=self.trg_embed,
+                                    max_output_length=max_output_length,
+                                    bos_index=self.bos_index,
+                                    decoder=self.decoder, temperature=1.0)
 
             # padded beam search target
             trg_np = batch.trg.detach().cpu().numpy()
-            #print("bs hyp", bs_hyp)
+            #print("bs hyp", curr_hyp)
             bs_hyp_pad = np.full(shape=(batch_size,max_output_length),
                                  fill_value=self.pad_index)
-            for i, row in enumerate(bs_hyp):
+            for i, row in enumerate(curr_hyp):
                 for j, col in enumerate(row):
                     bs_hyp_pad[i, j] = col
             #print("padded", bs_hyp_pad)
@@ -247,12 +262,12 @@ class Model(nn.Module):
             if chunk_type == "marking":
                 # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
                 # 1 if correct, 0 if incorrect
-                # fill bs_hyp with padding, since different length
+                # fill curr_hyp with padding, since different length
                 #print("bs", bs_hyp_pad)
                 #print("trg", trg_np)
                 # padding area is zero
                 markings = np.zeros_like(bs_hyp_pad, dtype=float)
-                for i, row in enumerate(bs_hyp):
+                for i, row in enumerate(curr_hyp):
                     for j, val in enumerate(row):
                         try:
                             if trg_np[i,j] == val:
@@ -266,7 +281,7 @@ class Model(nn.Module):
                 # decode hypothesis and target
                 join_char = " " if level in ["word", "bpe"] else ""
                 bs_hyp_decoded = [join_char.join(t) for t in
-                                  arrays_to_sentences(arrays=bs_hyp,
+                                  arrays_to_sentences(arrays=curr_hyp,
                                             vocabulary=self.trg_vocab,
                                             cut_at_eos=True)]
                 trg_np_decoded = [join_char.join(t) for t in
@@ -358,7 +373,7 @@ class Model(nn.Module):
                     continue
                 elif p == 1:
                     batch_loss += self_sup_loss[i]
-                    batch_tokens += bs_hyp[i].size
+                    batch_tokens += curr_hyp[i].size
                     batch_seqs += 1
                 elif p == 2:
                     batch_loss += chunk_loss[i]
@@ -366,7 +381,7 @@ class Model(nn.Module):
                     if chunk_type == "marking":
                         batch_tokens += markings[i].sum()
                     elif chunk_type == "sbleu":
-                        batch_tokens += bs_hyp[i].size
+                        batch_tokens += curr_hyp[i].size
                 elif p == 3:
                     batch_loss += pe_loss[i]
                     batch_seqs += 1

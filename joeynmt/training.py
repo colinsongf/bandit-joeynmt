@@ -238,6 +238,8 @@ class TrainManager:
         self.logger.info("Learning with feedback of type {}".format(
             self.chunk_type))
         self.self_entropy = train_config.get("self_entropy", False)
+        self.search = train_config.get("search", "beam")
+        self.logger.info("Using {} strategy for decoding of hypotheses for training.".format(self.search))
         if self.self_entropy:
             self.logger.info("Maximizing entropy for self-training")
 
@@ -279,14 +281,62 @@ class TrainManager:
             path=path, use_cuda=self.use_cuda)
 
         # restore model and optimizer parameters
-        self.model.load_state_dict(model_checkpoint["model_state"])
+        #self.model.load_state_dict(model_checkpoint["model_state"])
+
+        # restore model
+        param_dict = model_checkpoint["model_state"]
+
+        if self.model.regulator is not None:
+            new_param_dict = {}
+            curr_state_dict = self.model.state_dict()
+            for name, param in param_dict.items():
+                # if regulator params are different shape or don't exist: initialize newly
+                if "reg" in name:
+                    # regulator param
+                    if name not in curr_state_dict:
+                        self.logger.info("Skipping loading of {}".format(name))
+                        continue
+                    elif curr_state_dict[name].shape != param.shape:
+                        self.logger.info("Shape mismatch for param {}: old {}, new {}. Initializing uniformly.".format(name, param.shape, curr_state_dict[name].shape))
+                        # TODO diff init?
+                        scale = 0.1
+                        init = lambda p: nn.init.uniform_(p, a=-scale, b=scale)
+                        if "output_layer" in name:
+                            print(self.model.regulator.output_layer.weight)
+                            obj = self.model.regulator.output_layer
+
+                            new_param_dict[name] = init(torch.empty_like(getattr(obj, name.split(".")[-1])))
+                else:
+                    # standard loading
+                    new_param_dict[name] = param
+
+
+        else:
+            self.model.load_state_dict(model_checkpoint["model_state"])
+
 
         # restore optimizer parameters
         if type(self.optimizer) == dict:
-            self.optimizer["mt"].load_state_dict(
-                model_checkpoint["mt_optimizer_state"])
-            self.optimizer["regulator"].load_state_dict(
-                model_checkpoint["regulator_optimizer_state"])
+            # loaded model did have a regulator
+            if "mt_optimizer_state" in model_checkpoint:
+                self.optimizer["mt"].load_state_dict(
+                    model_checkpoint["mt_optimizer_state"])
+            # loaded model didn't have a regulator
+            elif "optimizer_state" in model_checkpoint:
+                self.optimizer["mt"].load_state_dict(
+                    model_checkpoint["optimizer_state"])
+            # else: newly created
+            else:
+                self.logger.info("Newly creating optimizer for MT.")
+                pass
+            # now for regulator
+            if "regulator_optimizer_state" in model_checkpoint:
+                self.optimizer["regulator"].load_state_dict(
+                    model_checkpoint["regulator_optimizer_state"])
+            else:  # doesn't have any (newly created)
+                self.logger.info("Newly creating optimizer for regulator.")
+                pass
+
             # overwrite learning rates
             for o_name, o in self.optimizer.items():
                 for i, param_group in enumerate(o.param_groups):
@@ -302,10 +352,22 @@ class TrainManager:
             self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
 
         if type(self.scheduler) == dict:
-            self.scheduler["mt"].load_state_dict(
-                model_checkpoint["mt_scheduler_state"])
-            self.scheduler["regulator"].load_state_dict(
-                model_checkpoint["regulator_scheduler_state"])
+            if "mt_scheduler_state" in model_checkpoint:
+                self.scheduler["mt"].load_state_dict(
+                    model_checkpoint["mt_scheduler_state"])
+            elif "scheduler_state" in model_checkpoint:
+                self.scheduler["mt"].load_state_dict(
+                    model_checkpoint["scheduler_state"])
+            else:
+                self.logger.info("Newly creating scheduler for MT.")
+                pass
+            if "regulator_scheduler_state" in model_checkpoint:
+                self.scheduler["regulator"].load_state_dict(
+                    model_checkpoint["regulator_scheduler_state"])
+            else:
+                self.logger.info("Newly creating scheduler for regulator.")
+                pass
+
             for s_name, s in self.scheduler.items():
                 new_patience = self.patience
                 old_patience = s.patience
@@ -643,11 +705,11 @@ class TrainManager:
                 pred=pred,
                 max_output_length=self.max_output_length,
                 chunk_type=self.chunk_type, level=self.level,
-                entropy=self.self_entropy)
+                entropy=self.self_entropy,
+                search=self.search)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch
-            # TODO change counts?
             return None, regulator_out, regulator_pred
 
         # normalize batch loss
