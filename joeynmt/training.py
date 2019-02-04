@@ -659,7 +659,7 @@ class TrainManager:
         else:
             raise NotImplementedError("Only normalize by 'batch' or 'tokens'")
 
-        norm_batch_loss = batch_loss.sum() / normalizer
+        norm_batch_loss = torch.mul(batch_loss.sum(), 1/normalizer)
         # division needed since loss.backward sums the gradients until updated
         norm_batch_multiply = norm_batch_loss / self.batch_multiplier
 
