@@ -401,72 +401,75 @@ class TrainManager:
                     self.regulator_outputs.extend(reg_pred.detach().cpu().numpy())
                 else:
                     entropy = None
-                # TODO this is not exact
-                if self.budget < 0:
-                    self.stop = True
-                    self.logger.info("Training ended since budget is consumed.")
 
-                reg_batch_loss = 0
-                if self.loss_weights["regulator"] > 0:
-                    # TODO what's the validation criterion? instead of BLEU could be regret
-                    with torch.no_grad():
-                        valid_score_immediate, valid_loss_immediate, \
-                        valid_ppl_immediate, _, \
-                        _, _, _, \
-                        _, _ = \
-                            validate_on_data(
-                                batch_size=self.valid_batch_size, data=valid_data,
-                                eval_metric=self.eval_metric,
-                                level=self.level, model=self.model,
-                                use_cuda=self.use_cuda,
-                                max_output_length=self.max_output_length,
-                                # but without running train input again
-                                criterion=None)
-                    #print("reward", valid_score_immediate)
-                    reward = valid_score_immediate/100
-                    self.rewards.append(reward)
-
-                    total_valid_duration = self.process_validation(
-                        epoch_no=epoch_no, valid_hypotheses=None,
-                        valid_hypotheses_raw=None,
-                        valid_sources_raw=None,
-                        valid_sources=None,
-                        valid_references=None,
-                        valid_attention_scores=None,
-                        valid_loss=valid_loss_immediate, valid_score=valid_score_immediate,
-                        valid_ppl=valid_ppl_immediate, store_attention=False,
-                        store_outputs=False, valid_start_time=0)
-
-                    self.model.train()
-                    # use validation result to update regulator
-                    if self.baseline:
-                        # TODO either mean
-                        #baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
-                        # TODO or previous
-                        num_previous = len(self.rewards)-1
-                       # baseline_reward = self.rewards[-2] if num_previous > 0 else 0
-                        # TODO or first
-                        # TODO mean of previous x
-                        window_size = 5
-                        baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
-
-                        #print(self.rewards)
-                        #print("baseline", baseline_reward)
-                        reward -= baseline_reward
-                        #print("reward with baseline", reward)
-
-                    #print("final reward", reward)
-                    reg_batch_loss, entropy, costs = self._train_batch_regulator(
-                        regulator_log_probs=reg_log_probs, regulator_pred=reg_pred,
-                        reward=reward, update=update)
-                    self.costs.append(costs)
-                    self.budget -= sum(costs)
+                reg_batch_loss = None
+                if self.model.regulator is not None:
                     # TODO this is not exact
                     if self.budget < 0:
                         self.stop = True
                         self.logger.info("Training ended since budget is consumed.")
 
-                #print("reg batch loss", reg_batch_loss)
+                    reg_batch_loss = 0
+                    if self.loss_weights["regulator"] > 0:
+                        # TODO what's the validation criterion? instead of BLEU could be regret
+                        with torch.no_grad():
+                            valid_score_immediate, valid_loss_immediate, \
+                            valid_ppl_immediate, _, \
+                            _, _, _, \
+                            _, _ = \
+                                validate_on_data(
+                                    batch_size=self.valid_batch_size, data=valid_data,
+                                    eval_metric=self.eval_metric,
+                                    level=self.level, model=self.model,
+                                    use_cuda=self.use_cuda,
+                                    max_output_length=self.max_output_length,
+                                    # but without running train input again
+                                    criterion=None)
+                        #print("reward", valid_score_immediate)
+                        reward = valid_score_immediate/100
+                        self.rewards.append(reward)
+
+                        total_valid_duration = self.process_validation(
+                            epoch_no=epoch_no, valid_hypotheses=None,
+                            valid_hypotheses_raw=None,
+                            valid_sources_raw=None,
+                            valid_sources=None,
+                            valid_references=None,
+                            valid_attention_scores=None,
+                            valid_loss=valid_loss_immediate, valid_score=valid_score_immediate,
+                            valid_ppl=valid_ppl_immediate, store_attention=False,
+                            store_outputs=False, valid_start_time=0)
+
+                        self.model.train()
+                        # use validation result to update regulator
+                        if self.baseline:
+                            # TODO either mean
+                            #baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
+                            # TODO or previous
+                            num_previous = len(self.rewards)-1
+                           # baseline_reward = self.rewards[-2] if num_previous > 0 else 0
+                            # TODO or first
+                            # TODO mean of previous x
+                            window_size = 5
+                            baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
+
+                            #print(self.rewards)
+                            #print("baseline", baseline_reward)
+                            reward -= baseline_reward
+                            #print("reward with baseline", reward)
+
+                        #print("final reward", reward)
+                        reg_batch_loss, entropy, costs = self._train_batch_regulator(
+                            regulator_log_probs=reg_log_probs, regulator_pred=reg_pred,
+                            reward=reward, update=update)
+                        self.costs.append(costs)
+                        self.budget -= sum(costs)
+                        # TODO this is not exact
+                        if self.budget < 0:
+                            self.stop = True
+                            self.logger.info("Training ended since budget is consumed.")
+
+                    #print("reg batch loss", reg_batch_loss)
 
                 count = self.batch_multiplier if update else count
                 count -= 1
@@ -636,7 +639,8 @@ class TrainManager:
         batch_loss, regulator_out, regulator_pred, batch_tokens, batch_seqs = \
             self.model.get_loss_for_batch(
                 batch=batch, criterion=self.criterion,
-                regulate=self.loss_weights["regulator"] > 0, pred=pred,
+                regulate=self.loss_weights["regulator"] > 0 and self.model.regulator is not None,
+                pred=pred,
                 max_output_length=self.max_output_length,
                 chunk_type=self.chunk_type, level=self.level,
                 entropy=self.self_entropy)

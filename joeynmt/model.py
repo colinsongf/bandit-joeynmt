@@ -26,15 +26,11 @@ def build_model(cfg: dict = None,
     src_embed = Embeddings(
         **cfg["encoder"]["embeddings"], vocab_size=len(src_vocab),
         padding_idx=src_padding_idx)
-    reg_src_embed = Embeddings(
-        **cfg["regulator"]["embeddings"], vocab_size=len(src_vocab),
-        padding_idx=src_padding_idx)
 
     if cfg.get("tied_embeddings", False) \
         and src_vocab.itos == trg_vocab.itos:
         # share embeddings for src and trg
         trg_embed = src_embed
-        reg_trg_embed = reg_src_embed
     else:
         trg_embed = Embeddings(
             **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
@@ -48,9 +44,16 @@ def build_model(cfg: dict = None,
     decoder = RecurrentDecoder(**cfg["decoder"], encoder=encoder,
                                vocab_size=len(trg_vocab),
                                emb_size=trg_embed.embedding_dim)
-    regulator = RecurrentRegulator(**cfg["regulator"],
+    if cfg.get("regulator") is not None:
+        reg_src_embed = Embeddings(
+            **cfg["regulator"]["embeddings"], vocab_size=len(src_vocab),
+            padding_idx=src_padding_idx)
+        regulator = RecurrentRegulator(**cfg["regulator"],
                                    src_emb_size=reg_src_embed.embedding_dim)
                                  #  trg_emb_size=reg_trg_embed.embedding_dim)
+    else:
+        regulator = None
+        reg_src_embed = None
 
     model = Model(encoder=encoder, decoder=decoder, regulator=regulator,
                   src_embed=src_embed, trg_embed=trg_embed,
@@ -118,7 +121,6 @@ class Model(nn.Module):
         :param src_lengths:
         :return: decoder outputs
         """
-        # TODO include regulator
         encoder_output, encoder_hidden = self.encode(src=src,
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
