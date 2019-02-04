@@ -39,9 +39,9 @@ def build_model(cfg: dict = None,
         trg_embed = Embeddings(
             **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
             padding_idx=trg_padding_idx)
-        reg_trg_embed = Embeddings(
-            **cfg["regulator"]["embeddings"], vocab_size=len(trg_vocab),
-            padding_idx=trg_padding_idx)
+        #reg_trg_embed = Embeddings(
+        #    **cfg["regulator"]["embeddings"], vocab_size=len(trg_vocab),
+        #    padding_idx=trg_padding_idx)
 
     encoder = RecurrentEncoder(**cfg["encoder"],
                                emb_size=src_embed.embedding_dim)
@@ -49,12 +49,12 @@ def build_model(cfg: dict = None,
                                vocab_size=len(trg_vocab),
                                emb_size=trg_embed.embedding_dim)
     regulator = RecurrentRegulator(**cfg["regulator"],
-                                   src_emb_size=reg_src_embed.embedding_dim,
-                                   trg_emb_size=reg_trg_embed.embedding_dim)
+                                   src_emb_size=reg_src_embed.embedding_dim)
+                                 #  trg_emb_size=reg_trg_embed.embedding_dim)
 
     model = Model(encoder=encoder, decoder=decoder, regulator=regulator,
                   src_embed=src_embed, trg_embed=trg_embed,
-                  reg_src_embed=reg_src_embed, reg_trg_embed=reg_trg_embed,
+                  reg_src_embed=reg_src_embed, #reg_trg_embed=reg_trg_embed,
                   src_vocab=src_vocab, trg_vocab=trg_vocab)
 
     # custom initialization of model parameters
@@ -162,15 +162,15 @@ class Model(nn.Module):
                             unrol_steps=unrol_steps,
                             hidden=decoder_hidden)
 
-    def regulate(self, src, hyp):
+    def regulate(self, src, src_length): #, hyp):
         """
 
         :param src:
         :param hyp:
         :return:
         """
-        return self.regulator(src=self.reg_src_embed(src),
-                              hyp=self.reg_trg_embed(hyp))
+        return self.regulator(src=self.reg_src_embed(src), src_length=src_length)
+                            #  hyp=self.reg_trg_embed(hyp))
 
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False):
         """
@@ -304,7 +304,7 @@ class Model(nn.Module):
                 self_sup_loss = self_sup_loss - entropy#*confidence.detach()
             #print("weighted", self_sup_loss)
 
-            regulator_out = self.regulate(batch.src, bs_target)
+            regulator_out = self.regulate(batch.src, batch.src_lengths) #bs_target)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
 
             #print("reg_log_probs", reg_log_probs.shape)

@@ -15,11 +15,11 @@ class Regulator(nn.Module):
     """
     Base regulator class
     """
-    def __init__(self, output_size, src_emb_size, trg_emb_size):
+    def __init__(self, output_size, src_emb_size): #, trg_emb_size):
         super(Regulator, self).__init__()
         self.output_size = output_size
         self.src_emb_size = src_emb_size
-        self.trg_emb_size = trg_emb_size
+        #self.trg_emb_size = trg_emb_size
 
     def get_costs(self, pred):
         """
@@ -69,13 +69,13 @@ class RecurrentRegulator(Regulator):
                  type,
                  hidden_size,
                  src_emb_size,
-                 trg_emb_size,
+                 #trg_emb_size,
                  num_layers,
                  bidirectional,
                  dropout,
                  **kwargs):
         super(RecurrentRegulator, self).__init__(
-            output_size, src_emb_size, trg_emb_size)
+            output_size, src_emb_size)#, trg_emb_size)
 
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
@@ -84,67 +84,57 @@ class RecurrentRegulator(Regulator):
             bidirectional=bidirectional,
             dropout=dropout if num_layers > 1 else 0.)
 
-        self.trg_rnn = rnn(
-            self.trg_emb_size, hidden_size, num_layers, batch_first=True,
-            bidirectional=bidirectional,
-            dropout=dropout if num_layers > 1 else 0.)
+        #self.trg_rnn = rnn(
+        #    self.trg_emb_size, hidden_size, num_layers, batch_first=True,
+        #    bidirectional=bidirectional,
+        #    dropout=dropout if num_layers > 1 else 0.)
 
         self.rnn_input_dropout = torch.nn.Dropout(p=dropout, inplace=False)
 
         self.output_layer = nn.Linear(
-            in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1)+
-                        self.trg_rnn.hidden_size*(2 if bidirectional else 1),
+            in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1),
+                      #  self.trg_rnn.hidden_size*(2 if bidirectional else 1),
             out_features=output_size
         )
 
-    def forward(self, src, hyp):
+    def forward(self, src, src_length): #, hyp):
         """
         Read src with Bi-RNNs, take last hidden states and combine
         :param src:
         :return:
         """
+        # TODO this is the same as in MT encoder
+
+        # apply dropout ot the rnn input
         src_embedded = self.rnn_input_dropout(src)
-        trg_embedded = self.rnn_input_dropout(hyp)
 
-        src_rnn_output, src_rnn_hidden = self.src_rnn(src_embedded)
-        trg_rnn_output, trg_rnn_hidden = self.trg_rnn(trg_embedded)
+        packed = pack_padded_sequence(src_embedded, src_length, batch_first=True)
+        output, hidden = self.src_rnn(packed)
 
-        if isinstance(src_rnn_hidden, tuple):
-            src_rnn_hidden, src_rnn_memory_cell = src_rnn_hidden
-        if isinstance(trg_rnn_hidden, tuple):
-            trg_rnn_hidden, trg_rnn_memory_cell = trg_rnn_hidden
+        if isinstance(hidden, tuple):
+            hidden, memory_cell = hidden
 
-       # print("src_hidden", src_rnn_hidden.shape)  # direction*layer x batch x hidden
-       # print("trg_hidden", trg_rnn_hidden.shape)
-
+        output, _ = pad_packed_sequence(output, batch_first=True)
         # hidden: dir*layers x batch x hidden
         # output: batch x max_length x directions*hidden
-        batch_size = src_rnn_hidden.size()[1]
+        batch_size = hidden.size()[1]
         # separate final hidden states by layer and direction
-        src_hidden_layerwise = src_rnn_hidden.view(self.src_rnn.num_layers,
+        hidden_layerwise = hidden.view(self.src_rnn.num_layers,
                                        2 if self.src_rnn.bidirectional else 1,
                                        batch_size, self.src_rnn.hidden_size)
-        trg_hidden_layerwise = trg_rnn_hidden.view(self.trg_rnn.num_layers,
-                                                   2 if self.trg_rnn.bidirectional else 1,
-                                                   batch_size,
-                                                   self.trg_rnn.hidden_size)
         # final_layers: layers x directions x batch x hidden
 
         # concatenate the final states of the last layer for each directions
         # thanks to pack_padded_sequence final states don't include padding
+        fwd_hidden_last = hidden_layerwise[-1:, 0]
+        bwd_hidden_last = hidden_layerwise[-1:, 1]
 
-        # TODO get final states without padding
-        # TODO use src_lengths and hyp_lengths
-        src_fw_hidden_last = src_hidden_layerwise[-1:, 0].squeeze(0)
-        src_bw_hidden_last = src_hidden_layerwise[-1:, 1].squeeze(0)
-        trg_fw_hidden_last = trg_hidden_layerwise[-1:, 0].squeeze(0)
-        trg_bw_hidden_last = trg_hidden_layerwise[-1:, 1].squeeze(0)
-
-        comb_states = torch.cat([src_fw_hidden_last, src_bw_hidden_last,
-                                 trg_fw_hidden_last, trg_bw_hidden_last], dim=1)
+        # only feed the final state of the top-most layer to the decoder
+        hidden_concat = torch.cat(
+            [fwd_hidden_last, bwd_hidden_last], dim=2).squeeze(0)
 
         # TODO activation function?
-        output = self.output_layer(comb_states)
+        output = self.output_layer(hidden_concat)
 
         return output
 
