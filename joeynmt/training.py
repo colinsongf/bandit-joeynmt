@@ -377,7 +377,6 @@ class TrainManager:
                         'Scheduler for {}: Overwriting patience'
                         ' from {:.4e} to {:.4e}.'.format(
                             s_name, old_patience, new_patience))
-            print(self.scheduler["regulator"].patience)
         else:
             self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
 
