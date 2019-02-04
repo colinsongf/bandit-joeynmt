@@ -4,6 +4,52 @@ import torch.nn.functional as F
 import numpy as np
 
 from joeynmt.helpers import tile
+from torch.distributions import Categorical
+
+
+def sample(src_mask, embed, bos_index, max_output_length, decoder,
+           encoder_output, encoder_hidden, temperature=1.0):
+    """
+    Ancestral sampling
+    :param src_mask:
+    :param embed:
+    :param bos_index:
+    :param max_output_length:
+    :param decoder:
+    :param encoder_output:
+    :param encoder_hidden:
+    :return:
+    """
+    batch_size = src_mask.size(0)
+    prev_y = src_mask.new_full(size=[batch_size, 1], fill_value=bos_index,
+                               dtype=torch.long)
+    output = []
+    attention_scores = []
+    hidden = None
+    prev_att_vector = None
+    for t in range(max_output_length):
+        # decode one single step
+        out, hidden, att_probs, prev_att_vector = decoder(
+            encoder_output=encoder_output,
+            encoder_hidden=encoder_hidden,
+            src_mask=src_mask,
+            trg_embed=embed(prev_y),
+            hidden=hidden,
+            prev_att_vector=prev_att_vector,
+            unrol_steps=1)
+        # out: batch x time=1 x vocab (logits)
+        word_dist = Categorical(logits=out/temperature)
+
+        # greedy decoding: choose arg max over vocabulary in each step
+        #next_word = torch.argmax(out, dim=-1)  # batch x time=1
+        next_word =  word_dist.sample() # sample an output
+        output.append(next_word.squeeze(1).detach().cpu().numpy())
+        prev_y = next_word
+        attention_scores.append(att_probs.squeeze(1).detach().cpu().numpy())
+        # batch, max_src_lengths
+    stacked_output = np.stack(output, axis=1)  # batch, time
+    stacked_attention_scores = np.stack(attention_scores, axis=1)
+    return stacked_output, stacked_attention_scores
 
 
 def greedy(src_mask, embed, bos_index, max_output_length, decoder,

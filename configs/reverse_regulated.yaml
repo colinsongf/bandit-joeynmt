@@ -30,7 +30,7 @@ training:
     weight_decay: 0.0
     normalization: "batch"  # "tokens"
     clip_grad_norm: 1.0
-    batch_size: 10
+    batch_size: 50
     valid_batch_size: 10
     scheduling: "plateau"
     patience: 1
@@ -40,7 +40,7 @@ training:
     validation_freq: 1000
     logging_freq: 100
     eval_metric: "bleu"
-    model_dir: "reverse_regulated_load_src"
+    model_dir: "reverse_regulated_weak_sample"
     overwrite: True
     shuffle: True
     use_cuda: False
@@ -48,12 +48,14 @@ training:
     print_valid_sents: 3
     loss_weights: {"mt": 1.0, "regulator": 1.0}
     #load_model: "reverse_regulated_src/4000.ckpt"
-    baseline: True  # baseline reward
+    baseline: True  # baseline reward for regulator
+    weak_baseline: True
+    search: "beam"
     entropy_regularizer: 0  # encourage exploration
-    budget: 50
+    budget: 5000
     cost_weight: 0.9
     budgeted_cost: False
-    only_sup: False
+    only_sup: 2
     chunk_type: "sbleu"  # marking
     self_entropy: False # encourage high entropy for self-training
 

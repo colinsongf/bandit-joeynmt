@@ -37,7 +37,7 @@ training:
     validation_freq: 1000
     logging_freq: 100
     eval_metric: "bleu"
-    model_dir: "reverse_luong_0003"
+    model_dir: "reverse_bahdanau"
     overwrite: True
     shuffle: True
     use_cuda: False
@@ -71,4 +71,4 @@ model:
         num_layers: 1
         input_feeding: True
         bridge: False
-        attention: "luong"
+        attention: "bahdanau"
