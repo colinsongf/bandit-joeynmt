@@ -304,13 +304,15 @@ class TrainManager:
                         if "output_layer" in name:
                             print(self.model.regulator.output_layer.weight)
                             obj = self.model.regulator.output_layer
+                            # TODO also adapt optimizer
 
                             new_param_dict[name] = init(torch.empty_like(getattr(obj, name.split(".")[-1])))
+                    else:
+                        new_param_dict[name] = param
                 else:
                     # standard loading
                     new_param_dict[name] = param
-
-
+            self.model.load_state_dict(new_param_dict)
         else:
             self.model.load_state_dict(model_checkpoint["model_state"])
 
