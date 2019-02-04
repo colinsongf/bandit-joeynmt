@@ -471,7 +471,7 @@ class TrainManager:
                         self.logger.info("Training ended since budget is consumed.")
 
                     reg_batch_loss = 0
-                    if self.loss_weights["regulator"] > 0:
+                    if self.loss_weights["regulator"] > 0 and update:
                         # TODO what's the validation criterion? instead of BLEU could be regret
                         with torch.no_grad():
                             valid_score_immediate, valid_loss_immediate, \
@@ -732,8 +732,8 @@ class TrainManager:
             norm_batch_multiply.backward(retain_graph=True)
 
         # gradients for regulator parameters should be zero
-        assert not any(["reg" in k for k,v in self.model.named_parameters()
-                        if v.grad is not None and torch.norm(v.grad) > 0])
+#        assert not any(["reg" in k for k,v in self.model.named_parameters()
+#                        if v.grad is not None and torch.norm(v.grad) > 0])
 
         # only update MT params
 
