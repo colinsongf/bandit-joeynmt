@@ -889,10 +889,11 @@ class TrainManager:
             if current_lr < self.learning_rate_min:
                 self.stop = True
 
+        # TODO use sent-score
         report_str = "Steps: {}\tLoss: {:.5f}\tPPL: {:.5f}\tMT-{}: {:.5f}\t" \
-                     "MT-sBLEU: {:.5f}".format(
+                     "MT-s{}: {:.5f}".format(
             self.steps, valid_loss, valid_ppl, eval_metric,
-            valid_score, valid_score)
+            valid_score, eval_metric, valid_score)
 
         if self.loss_weights["regulator"] > 0:
             # add statistics
