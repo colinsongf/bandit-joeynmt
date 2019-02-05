@@ -175,7 +175,240 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src), src_length=src_length)
                             #  hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False, search="beam", weak_baseline=True):
+    # TODO split batch according to regulator prediction
+    # then for each part of the batch compute parts
+    # then sum loss
+    # -> still mini-batching, but smaller
+
+    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, criterion, beam_size=10, beam_alpha=1.0, entropy=False):
+        """
+        Compute the loss for self-supervised training for the given selection
+        of indices of the batch
+
+        loss: -log_p(beam_search_hyp | x)
+
+        :param selection:
+        :param encoder_out:
+        :param encoder_hidden:
+        :param src_mask:
+        :return:
+        """
+        selected_encoder_out = torch.index_select(encoder_out, index=selection,
+                                              dim=0)
+        selected_encoder_hidden = torch.index_select(encoder_hidden, index=selection,
+                                                 dim=0)
+        selected_src_mask = torch.index_select(src_mask, index=selection, dim=0)
+        bs_hyp, _ = beam_search(size=beam_size,
+                                       encoder_output=selected_encoder_out,
+                                       encoder_hidden=selected_encoder_hidden,
+                                       src_mask=selected_src_mask,
+                                       embed=self.trg_embed,
+                                       max_output_length=max_output_length,
+                                       alpha=beam_alpha,
+                                       eos_index=self.eos_index,
+                                       pad_index=self.pad_index,
+                                       bos_index=self.bos_index,
+                                       decoder=self.decoder)
+        selected_batch_size = selection.shape[0]
+        selected_tokens = bs_hyp.size
+        bs_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
+                                  fill_value=self.pad_index)
+        for i, row in enumerate(bs_hyp):
+            for j, col in enumerate(row):
+                bs_hyp_pad[i, j] = col
+        # print("padded", bs_hyp_pad)
+        bos_array = np.full(shape=(selected_batch_size, 1),
+                            fill_value=self.bos_index)
+        # prepend bos but cut off one bos
+        bs_hyp_pad_bos = np.concatenate((bos_array, bs_hyp_pad),
+                                             axis=1)[:, :-1]
+        # print("with bos", bs_hyp_pad_bos)
+
+        # treat bs output as target for forced decoding to get log likelihood of bs output
+        bs_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
+                                           encoder_hidden=selected_encoder_hidden,
+                                           trg_input=src_mask.new(
+                                               bs_hyp_pad_bos).long(),
+                                           src_mask=selected_src_mask,
+                                           unrol_steps=bs_hyp_pad_bos.shape[1])
+        bs_log_probs = F.log_softmax(bs_out, dim=-1)
+        # greedy_log_prob = self.force_decode(encoder_output=encoder_out,
+        #                                 encoder_hidden=encoder_hidden,
+        #                                 trg_input=batch.trg.new(greedy_hyp).long(),
+        #                                 src_mask=batch.src_mask)
+
+        bs_target = src_mask.new(bs_hyp_pad).long()
+
+        bs_nll = criterion(
+            input=bs_log_probs.contiguous().view(-1,bs_log_probs.size(-1)),
+            target=bs_target.view(-1))
+        self_sup_loss = bs_nll.view(selected_batch_size, -1).sum(
+            -1)  # batch
+
+        if entropy:
+            entropy = (-torch.exp(bs_log_probs) * bs_log_probs).sum(
+                -1).mean(1)
+            # print("entropy", entropy)
+            self_sup_loss = self_sup_loss - entropy  # *confidence.detach()
+            # print("weighted", self_sup_loss)
+        # TODO logprob selection can actually be done for all, just return chosen hyp and reward
+        # then logprobs are selected and multiplied by reward
+        assert self_sup_loss.size(0) == selected_batch_size
+        return self_sup_loss.sum(), selected_tokens, selected_batch_size
+
+    def _weak_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, chunk_type, criterion, target, level, weak_baseline=True, temperature=1.0):
+        """
+        Compute weakly-supervised loss for selected inputs
+
+        loss: -log_p(sampled_hyp | x) * -reward
+
+        Reward is either token- or sequence-based
+
+        :param selection:
+        :return:
+        """
+        selected_encoder_out = torch.index_select(encoder_out, index=selection,
+                                                  dim=0)
+        selected_encoder_hidden = torch.index_select(encoder_hidden,
+                                                     index=selection,
+                                                     dim=0)
+        selected_src_mask = torch.index_select(src_mask, index=selection, dim=0)
+        selected_trg = torch.index_select(target, index=selection, dim=0)
+        trg_np = selected_trg.detach().cpu().numpy()
+
+        sample_hyp, _ = sample(encoder_output=selected_encoder_out,
+                             encoder_hidden=selected_encoder_hidden,
+                             src_mask=selected_src_mask, embed=self.trg_embed,
+                             max_output_length=max_output_length,
+                             bos_index=self.bos_index,
+                             decoder=self.decoder, temperature=temperature)
+
+        selected_batch_size = selection.shape[0]
+        sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
+                             fill_value=self.pad_index)
+        for i, row in enumerate(sample_hyp):
+            for j, col in enumerate(row):
+                sample_hyp_pad[i, j] = col
+        # print("padded", bs_hyp_pad)
+        bos_array = np.full(shape=(selected_batch_size, 1),
+                            fill_value=self.bos_index)
+        # prepend bos but cut off one bos
+        sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp_pad),
+                                        axis=1)[:, :-1]
+        # print("with bos", bs_hyp_pad_bos)
+
+        # treat bs output as target for forced decoding to get log likelihood of bs output
+        sample_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
+                                      encoder_hidden=selected_encoder_hidden,
+                                      trg_input=src_mask.new(
+                                          sample_hyp_pad_bos).long(),
+                                      src_mask=selected_src_mask,
+                                      unrol_steps=sample_hyp_pad_bos.shape[1])
+        sample_log_probs = F.log_softmax(sample_out, dim=-1)
+
+        sample_target = src_mask.new(sample_hyp_pad).long()
+
+        sample_nll = criterion(
+            input=sample_log_probs.contiguous().view(-1, sample_log_probs.size(-1)),
+            target=sample_target.view(-1))
+
+        if chunk_type == "marking":
+            # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
+            # 1 if correct, 0 if incorrect
+            # fill curr_hyp with padding, since different length
+            # print("bs", bs_hyp_pad)
+            # print("trg", trg_np)
+            # padding area is zero
+            markings = np.zeros_like(sample_hyp_pad, dtype=float)
+            for i, row in enumerate(sample_hyp):
+                for j, val in enumerate(row):
+                    try:
+                        if trg_np[i, j] == val:
+                            markings[i, j] = 1.
+                    except IndexError:  # BS is longer than trg
+                        continue
+            chunk_loss = (sample_nll.view(selected_batch_size, -1) * src_mask.new(
+                markings).float()).sum(1)
+            selected_tokens = markings.sum()
+
+        else:
+            # use same reward for all the tokens
+            if chunk_type == "sbleu":
+                # decode hypothesis and target
+                join_char = " " if level in ["word", "bpe"] else ""
+                bs_hyp_decoded = [join_char.join(t) for t in
+                                  arrays_to_sentences(arrays=sample_hyp,
+                                                      vocabulary=self.trg_vocab,
+                                                      cut_at_eos=True)]
+                trg_np_decoded = [join_char.join(t) for t in
+                                  arrays_to_sentences(arrays=trg_np,
+                                                      vocabulary=self.trg_vocab,
+                                                      cut_at_eos=True)]
+                assert len(trg_np_decoded) == len(bs_hyp_decoded)
+                # compute sBLEUs
+                sbleus = np.array(sbleu(bs_hyp_decoded, trg_np_decoded))
+                rewards = 1 - sbleus
+
+            elif chunk_type == "ster":
+                # decode hypothesis and target
+                bs_hyp_decoded_list = arrays_to_sentences(arrays=sample_hyp,
+                                                          vocabulary=self.trg_vocab,
+                                                          cut_at_eos=True)
+                trg_np_decoded_list = arrays_to_sentences(arrays=trg_np,
+                                                          vocabulary=self.trg_vocab,
+                                                          cut_at_eos=True)
+                assert len(trg_np_decoded_list) == len(bs_hyp_decoded_list)
+                sters = np.array(ster(bs_hyp_decoded_list, trg_np_decoded_list))
+                rewards = sters
+
+            if weak_baseline:
+                if len(self.rewards) > 0:
+                    # subtract mean from reward
+                    new_rewards = rewards - np.mean(self.rewards)
+                else:
+                    new_rewards = rewards
+                #update baseline
+                self.rewards.extend(rewards)
+            else:
+                new_rewards = rewards
+
+            selected_tokens = sample_hyp.size
+            # make update with baselined rewards
+            chunk_loss = sample_nll.sum(-1) * src_mask.new(new_rewards).float()
+
+        assert chunk_loss.size(0) == selected_batch_size
+        return chunk_loss.sum(), selected_tokens, selected_batch_size
+
+    def _full_sup_loss(self, selection, decoder_out, criterion, target):
+        """
+        Compute the loss for fully-supervised training for the given selection
+        of indices of the batch
+
+        loss: -log_p(reference | x)
+
+        :param selection:
+        :param src_mask:
+        :return:
+        """
+        selected_target = torch.index_select(target, index=selection, dim=0)
+        selected_decoder_out = torch.index_select(decoder_out, index=selection,
+                                                  dim=0)
+        selected_batch_size = selection.shape[0]
+        selected_tokens = (selected_target != self.pad_index).sum().cpu().numpy()
+
+        # compute log probs of teacher-forced decoder for fully-supervised training
+        tf_log_probs = F.log_softmax(selected_decoder_out, dim=-1)
+        # in case of full supervision (teacher forcing with post-edit)
+        full_sup_loss = criterion(
+            input=tf_log_probs.contiguous().view(-1, tf_log_probs.size(-1)),
+            target=selected_target.contiguous().view(-1)).view(selected_batch_size, -1).sum(-1)
+
+        assert full_sup_loss.size(0) == selected_batch_size
+        return full_sup_loss.sum(), selected_tokens, selected_batch_size
+
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
+                           max_output_length=100, chunk_type="marking", level="word",
+                           entropy=False, search="beam", weak_baseline=True):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -183,178 +416,33 @@ class Model(nn.Module):
         :param criterion:
         :return:
         """
+        # TODO if there is no regutor, predictions of it are always 3 -> generalize code
         encoder_out, encoder_hidden, decoder_out = \
             self.forward(src=batch.src, trg_input=batch.trg_input,
                          src_mask=batch.src_mask, src_lengths=batch.src_lengths)
         out, hidden, att_probs, _ = decoder_out
+        batch_size = batch.src.size(0)
 
-        # compute log probs of teacher-forced decoder for fully-supervised training
-        tf_log_probs = F.log_softmax(out, dim=-1)
-        batch_size = batch.trg.size(0)
-        # in case of full supervision (teacher forcing with post-edit)
-        pe_loss = criterion(
-            input=tf_log_probs.contiguous().view(-1, tf_log_probs.size(-1)),
-            target=batch.trg.contiguous().view(-1)).view(batch_size, -1).sum(-1)
-        assert pe_loss.size(0) == batch_size
-        #print("pe_loss", pe_loss)
-        # batch*length
+        if not regulate:
+            log_probs = F.log_softmax(decoder_out, dim=-1)
+            batch_loss = criterion(
+                input=log_probs.contiguous().view(-1, log_probs.size(-1)),
+                target=batch.trg.contiguous().view(-1)).sum()
+            batch_tokens = batch.ntokens
+            batch_seqs = batch.nseqs
+            assert batch_loss.size(0) == 1
+            reg_pred = None
+            reg_log_probs = None
 
-        if regulate:
-            # TODO for self-training we want BS; for weak feedback sample
-            # compute outputs that are presented to user (BS)
-           # max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
-            beam_size = 10
-            beam_alpha = 1.0
-            if search == "greedy":
-                curr_hyp, _ = greedy(encoder_output=encoder_out,
-                                    encoder_hidden=encoder_hidden,
-                                    src_mask=batch.src_mask, embed=self.trg_embed,
-                                    max_output_length=max_output_length,
-                                    bos_index=self.bos_index,
-                                    decoder=self.decoder)
-            elif search == "beam":
-                curr_hyp, _ = beam_search(size=beam_size, encoder_output=encoder_out,
-                                    encoder_hidden=encoder_hidden,
-                                    src_mask=batch.src_mask, embed=self.trg_embed,
-                                    max_output_length=max_output_length,
-                                    alpha=beam_alpha, eos_index=self.eos_index,
-                                    pad_index=self.pad_index, bos_index=self.bos_index,
-                                    decoder=self.decoder)
-            elif search == "sample":
-                curr_hyp, _ = sample(encoder_output=encoder_out,
-                                    encoder_hidden=encoder_hidden,
-                                    src_mask=batch.src_mask, embed=self.trg_embed,
-                                    max_output_length=max_output_length,
-                                    bos_index=self.bos_index,
-                                    decoder=self.decoder, temperature=1.0)
-
-            # padded beam search target
-            trg_np = batch.trg.detach().cpu().numpy()
-            #print("bs hyp", curr_hyp)
-            bs_hyp_pad = np.full(shape=(batch_size,max_output_length),
-                                 fill_value=self.pad_index)
-            for i, row in enumerate(curr_hyp):
-                for j, col in enumerate(row):
-                    bs_hyp_pad[i, j] = col
-            #print("padded", bs_hyp_pad)
-            bos_array = np.full(shape=(batch_size, 1), fill_value=self.bos_index)
-            # prepend bos but cut off one bos
-            bs_hyp_pad_bos = np.concatenate((bos_array, bs_hyp_pad), axis=1)[:, :-1]
-            #print("with bos", bs_hyp_pad_bos)
-
-            # treat bs output as target for forced decoding to get log likelihood of bs output
-            bs_out, _, _, _ = self.decode(encoder_output=encoder_out,
-                                       encoder_hidden=encoder_hidden,
-                                       trg_input=batch.trg.new(bs_hyp_pad_bos).long(),
-                                       src_mask=batch.src_mask,
-                                       unrol_steps=bs_hyp_pad_bos.shape[1])
-            bs_log_probs = F.log_softmax(bs_out, dim=-1)
-            #greedy_log_prob = self.force_decode(encoder_output=encoder_out,
-            #                                 encoder_hidden=encoder_hidden,
-            #                                 trg_input=batch.trg.new(greedy_hyp).long(),
-            #                                 src_mask=batch.src_mask)
-
-            bs_target = batch.trg.new(bs_hyp_pad).long()
-
-            bs_nll = criterion(
-                input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
-                target=bs_target.view(-1))
-
-            if chunk_type == "marking":
-                # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
-                # 1 if correct, 0 if incorrect
-                # fill curr_hyp with padding, since different length
-                #print("bs", bs_hyp_pad)
-                #print("trg", trg_np)
-                # padding area is zero
-                markings = np.zeros_like(bs_hyp_pad, dtype=float)
-                for i, row in enumerate(curr_hyp):
-                    for j, val in enumerate(row):
-                        try:
-                            if trg_np[i,j] == val:
-                                markings[i,j] = 1.
-                        except IndexError: # BS is longer than trg
-                                continue
-                chunk_loss = (bs_nll.view(batch_size, -1) * batch.trg.new(
-                    markings).float()).sum(1)
-            else:
-                # use same reward for all the tokens
-                if chunk_type == "sbleu":
-                    # decode hypothesis and target
-                    join_char = " " if level in ["word", "bpe"] else ""
-                    bs_hyp_decoded = [join_char.join(t) for t in
-                                      arrays_to_sentences(arrays=curr_hyp,
-                                                vocabulary=self.trg_vocab,
-                                                cut_at_eos=True)]
-                    trg_np_decoded = [join_char.join(t) for t in
-                                      arrays_to_sentences(arrays=trg_np,
-                                                vocabulary=self.trg_vocab,
-                                                cut_at_eos=True)]
-                    assert len(trg_np_decoded) == len(bs_hyp_decoded)
-                    # compute sBLEUs
-                    sbleus = np.array(sbleu(bs_hyp_decoded, trg_np_decoded))
-                    rewards = 1-sbleus
-
-                elif chunk_type == "ster":
-                    # decode hypothesis and target
-                    bs_hyp_decoded_list = arrays_to_sentences(arrays=curr_hyp,
-                                                          vocabulary=self.trg_vocab,
-                                                          cut_at_eos=True)
-                    trg_np_decoded_list = arrays_to_sentences(arrays=trg_np,
-                                                          vocabulary=self.trg_vocab,
-                                                          cut_at_eos=True)
-                    assert len(trg_np_decoded_list) == len(bs_hyp_decoded_list)
-                    sters = np.array(ster(bs_hyp_decoded_list, trg_np_decoded_list))
-                    rewards = sters
-
-                if weak_baseline:
-                    if len(self.rewards) > 0:
-                        new_rewards = rewards-np.mean(self.rewards)
-                    else:
-                        new_rewards = rewards
-                else:
-                    new_rewards = rewards
-
-                # make update with baselined rewards
-
-                chunk_loss = bs_nll.sum(-1)*batch.trg.new(new_rewards).float()
-
-           # print("trg", batch.trg.detach().numpy())
-            #print("markings", markings)
-            # no need to add trg mask -> padding is masked automatically
-            #print("bs log probs", bs_log_probs.shape)
-
-            #print("bs nll", bs_nll)
-            #print("markings", markings)
-            # bs hyp might not have the same length as tf seq
-            # TODO prevent model from preferring shorter ones
-            assert chunk_loss.size(0) == batch_size
-            #print("chunk loss", chunk_loss)
-
-            # in case of self-supervision: run BS to use as target instead
-            # costs: 0
-            # sum over time dimension
-            self_sup_loss = bs_nll.view(batch_size, -1).sum(-1)  # batch
-            assert self_sup_loss.size(0) == batch_size
-            #print("self sup loss", self_sup_loss)
-            # weigh by confidence = mean(prob(sample))
-            #confidence = torch.exp(-bs_nll.view(batch_size, -1).mean(-1))
-            if entropy:
-                entropy = (-torch.exp(bs_log_probs)*bs_log_probs).sum(-1).mean(1)
-                #print("entropy", entropy)
-                self_sup_loss = self_sup_loss - entropy#*confidence.detach()
-            #print("weighted", self_sup_loss)
-
-            regulator_out = self.regulate(batch.src, batch.src_lengths) #bs_target)
+        else:
+            # with regulator
+            regulator_out = self.regulate(batch.src,
+                                          batch.src_lengths)  # bs_target)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
-
-            #print("reg_log_probs", reg_log_probs.shape)
 
             # sample an output
             reg_dist = Categorical(logits=regulator_out)
-            #reg_pred = torch.argmax(regulator_out, dim=-1)
             reg_pred = reg_dist.sample()
-            #print("regulator prediction", reg_pred)
 
             # heuristic: always choose one type of supervision
             if pred is not False:
@@ -363,65 +451,63 @@ class Model(nn.Module):
                     fill_value = np.random.randint(0, 4, size=batch_size)
                 else:
                     fill_value = pred
-                reg_pred = torch.from_numpy(np.full(shape=(batch_size), fill_value=fill_value)).to(regulator_out.device).long()
-            #print("regulator prediction", reg_pred)
+                reg_pred = torch.from_numpy(
+                    np.full(shape=(batch_size), fill_value=fill_value)).to(
+                    regulator_out.device).long()
+                # print("regulator prediction", reg_pred)
 
-            #one_hot_reg_pred = torch.eye(
-            #    self.regulator.output_size).index_select(dim=0, index=reg_pred)
-            #print("one hot", one_hot_reg_pred)
-
-            # now decide which loss counts for which batch
-            # every element in the batch could get a different type of feedback
-            # so we have to iterate over the batch
-            # or compute losses for all options always and then weigh them
-            # which one is more expensive?
-            # probably option 1
-            # -> regulator predicts one-hot weighting of losses for each input
-            #print("regulator pred", one_hot_reg_pred.detach().numpy())
-
-            # need a matrix with
-            # [none, self, chunk, post, ]-losses
-            #none_loss = self_sup_loss.new_zeros(size=(batch_size,))
-            #all_losses = torch.stack([none_loss, self_sup_loss, chunk_loss, pe_loss], dim=1)
-            #print("all losses", all_losses)
-            # masking out those losses that were not chosen for batch
-            #batch_loss = (one_hot_reg_pred.detach()*all_losses).sum(1)
             batch_loss = 0
             batch_tokens = 0
             batch_seqs = 0
-            # TODO check if losses balanced? norm needed? avg over batch?
-            # TODO rather loop over loss and sum
-            print(reg_pred)
-            for i, p in enumerate(reg_pred):
-                if p == 0:
-                    continue
-                elif p == 1:
-                    batch_loss += self_sup_loss[i]
-                    batch_tokens += curr_hyp[i].size
-                    batch_seqs += 1
-                elif p == 2:
-                    batch_loss += chunk_loss[i]
-                    batch_seqs += 1
-                    if chunk_type == "marking":
-                        batch_tokens += markings[i].sum()
-                    elif chunk_type == "sbleu" or chunk_type == "ster":
-                        batch_tokens += curr_hyp[i].size
-                    # keep track of original rewards for baseline
-                    if weak_baseline:
-                        self.rewards.append(rewards[i])
-                elif p == 3:
-                    batch_loss += pe_loss[i]
-                    batch_seqs += 1
-                    batch_tokens += (batch.trg[i] != self.pad_index).sum().cpu().numpy()
-            if type(batch_loss) == int:
+
+            # split up the batch and sum the individual losses
+            if 0 in reg_pred:
+                # skip those: no loss
+                zeros = torch.eq(reg_pred, 0)
+                zeros_idx = zeros.nonzero().squeeze(1)
+            if 1 in reg_pred:
+                ones = torch.eq(reg_pred, 1)
+                ones_idx = ones.nonzero().squeeze(1)
+                # compute self-train loss for those (smaller batch)
+                self_sup_loss_selected, tokens, seqs = self._self_sup_loss(
+                    selection=ones_idx, encoder_out=encoder_out, entropy=entropy,
+                    encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
+                    max_output_length=max_output_length, criterion=criterion)
+                #print("self sup selected", self_sup_loss_selected)
+                batch_loss += self_sup_loss_selected.sum()
+                batch_tokens += tokens
+                batch_seqs += seqs
+
+            if 2 in reg_pred:
+                # compute weak-sup. loss for those
+                twos = torch.eq(reg_pred, 2)
+                twos_idx = twos.nonzero().squeeze(1)
+                weak_sup_loss_selected, tokens, seqs = self._weak_sup_loss(
+                    selection=twos_idx, encoder_out=encoder_out,
+                    encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
+                    max_output_length=max_output_length, criterion=criterion,
+                    chunk_type=chunk_type, level=level,
+                    target=batch.trg, temperature=1.0,
+                    weak_baseline=weak_baseline)
+                #print("weak sup selected", weak_sup_loss_selected)
+                batch_loss += weak_sup_loss_selected.sum()
+                batch_tokens += tokens
+                batch_seqs += seqs
+
+            if 3 in reg_pred:
+                # compute fully-sup. loss for those
+                threes = torch.eq(reg_pred, 3)
+                threes_idx = threes.nonzero().squeeze(1)
+                full_sup_loss_selected, tokens, seqs = self._full_sup_loss(
+                    selection=threes_idx, decoder_out=out,
+                    criterion=criterion, target=batch.trg)
+               # print("full sup selected", full_sup_loss_selected)
+                batch_loss += full_sup_loss_selected
+                batch_tokens += tokens
+                batch_seqs += seqs
+
+            if type(batch_loss) == int:  # no update for batch
                 batch_loss = None
-            #print(batch_tokens, batch_seqs, batch.ntokens, batch.nseqs)
-        else:
-            batch_loss = pe_loss.sum(0)  # with regulator summing is not done within criterion
-            reg_log_probs = None
-            reg_pred = None
-            batch_tokens = batch.ntokens
-            batch_seqs = batch.nseqs
 
         return batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs
 
