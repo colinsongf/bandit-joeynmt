@@ -242,7 +242,10 @@ class TrainManager:
         self.search = train_config.get("search", "beam")
         self.logger.info("Using {} strategy for decoding of hypotheses for training.".format(self.search))
         if self.self_entropy:
-            self.logger.info("Maximizing entropy for self-training")
+            self.logger.info("Maximizing entropy for self-training.")
+        self.weak_baseline = train_config.get("weak_baseline", False)
+        if self.weak_baseline:
+            self.logger.info("Using baseline for weak feedback.")
 
     def save_checkpoint(self):
         """
@@ -708,7 +711,8 @@ class TrainManager:
                 max_output_length=self.max_output_length,
                 chunk_type=self.chunk_type, level=self.level,
                 entropy=self.self_entropy,
-                search=self.search)
+                search=self.search,
+                weak_baseline=self.weak_baseline)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch

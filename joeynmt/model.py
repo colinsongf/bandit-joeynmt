@@ -108,6 +108,7 @@ class Model(nn.Module):
         self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
+        self.rewards = []
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
@@ -174,7 +175,7 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src), src_length=src_length)
                             #  hyp=self.reg_trg_embed(hyp))
 
-    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False, search="beam"):
+    def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False, max_output_length=100, chunk_type="marking", level="word", entropy=False, search="beam", weak_baseline=True):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -276,36 +277,47 @@ class Model(nn.Module):
                                 continue
                 chunk_loss = (bs_nll.view(batch_size, -1) * batch.trg.new(
                     markings).float()).sum(1)
-
-            elif chunk_type == "sbleu":
-                # decode hypothesis and target
-                join_char = " " if level in ["word", "bpe"] else ""
-                bs_hyp_decoded = [join_char.join(t) for t in
-                                  arrays_to_sentences(arrays=curr_hyp,
-                                            vocabulary=self.trg_vocab,
-                                            cut_at_eos=True)]
-                trg_np_decoded = [join_char.join(t) for t in
-                                  arrays_to_sentences(arrays=trg_np,
-                                            vocabulary=self.trg_vocab,
-                                            cut_at_eos=True)]
-                assert len(trg_np_decoded) == len(bs_hyp_decoded)
-                # compute sBLEUs
-                sbleus = np.array(sbleu(bs_hyp_decoded, trg_np_decoded))
+            else:
                 # use same reward for all the tokens
-                chunk_loss = bs_nll.sum(-1)*(1-batch.trg.new(
-                    sbleus)).float()
+                if chunk_type == "sbleu":
+                    # decode hypothesis and target
+                    join_char = " " if level in ["word", "bpe"] else ""
+                    bs_hyp_decoded = [join_char.join(t) for t in
+                                      arrays_to_sentences(arrays=curr_hyp,
+                                                vocabulary=self.trg_vocab,
+                                                cut_at_eos=True)]
+                    trg_np_decoded = [join_char.join(t) for t in
+                                      arrays_to_sentences(arrays=trg_np,
+                                                vocabulary=self.trg_vocab,
+                                                cut_at_eos=True)]
+                    assert len(trg_np_decoded) == len(bs_hyp_decoded)
+                    # compute sBLEUs
+                    sbleus = np.array(sbleu(bs_hyp_decoded, trg_np_decoded))
+                    rewards = 1-sbleus
 
-            elif chunk_type == "ster":
-                # decode hypothesis and target
-                bs_hyp_decoded_list = arrays_to_sentences(arrays=curr_hyp,
-                                                      vocabulary=self.trg_vocab,
-                                                      cut_at_eos=True)
-                trg_np_decoded_list = arrays_to_sentences(arrays=trg_np,
-                                                      vocabulary=self.trg_vocab,
-                                                      cut_at_eos=True)
-                assert len(trg_np_decoded_list) == len(bs_hyp_decoded_list)
-                sters = np.array(ster(bs_hyp_decoded_list, trg_np_decoded_list))
-                chunk_loss = bs_nll.sum(-1)*batch.trg.new(sters).float()
+                elif chunk_type == "ster":
+                    # decode hypothesis and target
+                    bs_hyp_decoded_list = arrays_to_sentences(arrays=curr_hyp,
+                                                          vocabulary=self.trg_vocab,
+                                                          cut_at_eos=True)
+                    trg_np_decoded_list = arrays_to_sentences(arrays=trg_np,
+                                                          vocabulary=self.trg_vocab,
+                                                          cut_at_eos=True)
+                    assert len(trg_np_decoded_list) == len(bs_hyp_decoded_list)
+                    sters = np.array(ster(bs_hyp_decoded_list, trg_np_decoded_list))
+                    rewards = sters
+
+                if weak_baseline:
+                    if len(self.rewards) > 0:
+                        new_rewards = rewards-np.mean(self.rewards)
+                    else:
+                        new_rewards = rewards
+                    # keep track of original rewards for baseline
+                    self.rewards.extend(rewards)
+                    # make update with baselined rewards
+                    rewards = new_rewards
+
+                chunk_loss = bs_nll.sum(-1)*batch.trg.new(rewards).float()
 
            # print("trg", batch.trg.detach().numpy())
             #print("markings", markings)
