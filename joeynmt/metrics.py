@@ -1,7 +1,7 @@
 # coding: utf-8
 
 import sacrebleu
-
+import pyter
 
 def chrf(hypotheses, references):
     """
@@ -14,6 +14,32 @@ def chrf(hypotheses, references):
     return sacrebleu.corpus_chrf(
                     hypotheses=hypotheses,
                     references=references)
+
+
+def ter(hypotheses, references):
+    """
+    TER
+    :param hypotheses:
+    :param references:
+    :return:
+    """
+    assert len(hypotheses) == len(references)
+    ters = ster(hypotheses, references)
+    return sum(ters)/len(ters)  # if len(ters) > 0 else sum(ters))
+
+
+def ster(hypotheses, references):
+    """
+    Sentence-wise computation of TER
+    :param hypotheses:
+    :param references:
+    :return:
+    """
+    sters = []
+    for hyp, ref in zip(hypotheses, references):
+        ster = pyter.ter(hyp, ref)
+        sters.append(ster)
+    return sters
 
 
 def bleu(hypotheses, references):

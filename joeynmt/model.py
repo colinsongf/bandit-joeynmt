@@ -12,7 +12,7 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy, sample
 from joeynmt.vocabulary import Vocabulary
 from torch.distributions import Categorical
-from joeynmt.metrics import sbleu
+from joeynmt.metrics import sbleu, ster
 from joeynmt.helpers import arrays_to_sentences
 
 
@@ -199,7 +199,7 @@ class Model(nn.Module):
         # batch*length
 
         if regulate:
-
+            # TODO for self-training we want BS; for weak feedback sample
             # compute outputs that are presented to user (BS)
            # max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
             beam_size = 10
@@ -294,6 +294,18 @@ class Model(nn.Module):
                 # use same reward for all the tokens
                 chunk_loss = bs_nll.sum(-1)*(1-batch.trg.new(
                     sbleus)).float()
+
+            elif chunk_type == "ster":
+                # decode hypothesis and target
+                bs_hyp_decoded_list = arrays_to_sentences(arrays=curr_hyp,
+                                                      vocabulary=self.trg_vocab,
+                                                      cut_at_eos=True)
+                trg_np_decoded_list = arrays_to_sentences(arrays=trg_np,
+                                                      vocabulary=self.trg_vocab,
+                                                      cut_at_eos=True)
+                assert len(trg_np_decoded_list) == len(bs_hyp_decoded_list)
+                sters = np.array(ster(bs_hyp_decoded_list, trg_np_decoded_list))
+                chunk_loss = bs_nll.sum(-1)*batch.trg.new(sters).float()
 
            # print("trg", batch.trg.detach().numpy())
             #print("markings", markings)

@@ -6,7 +6,8 @@ from joeynmt.constants import PAD_TOKEN
 from joeynmt.helpers import load_data, arrays_to_sentences, bpe_postprocess, \
     load_config, get_latest_checkpoint, make_data_iter, \
     load_model_from_checkpoint, store_attention_plots
-from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
+from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy, \
+    ster, ter
 from joeynmt.model import build_model
 from joeynmt.batch import Batch
 
@@ -115,6 +116,9 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             elif eval_metric.lower() == 'sequence_accuracy':
                 current_valid_score = sequence_accuracy(valid_hypotheses,
                                                valid_references)
+            elif eval_metric.lower() == "ter":
+                # input to TER are lists
+                current_valid_score = ter(decoded_valid, [t for t in data.trg])
         else:
             current_valid_score = -1
 

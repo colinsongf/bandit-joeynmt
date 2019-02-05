@@ -101,7 +101,7 @@ class TrainManager:
                 self.optimizer = torch.optim.SGD(
                     model.parameters(), weight_decay=weight_decay,
                     lr=self.learning_rate)
-
+        self.eval_metric = train_config.get("eval_metric", "bleu")
         self.schedule_metric = train_config.get("schedule_metric",
                                                 "eval_metric")
         self.trainable_params = [n for (n, p) in self.model.named_parameters()
@@ -111,11 +111,13 @@ class TrainManager:
         self.ckpt_metric = train_config.get("ckpt_metric", "eval_metric")
         self.best_ckpt_iteration = 0
         # if we schedule after BLEU/chrf, we want to maximize it, else minimize
-        scheduler_mode = "max" if self.schedule_metric == "eval_metric" \
-            else "min"
+        if self.schedule_metric == "eval_metric" and self.eval_metric in ["bleu", "chrf"]:
+            scheduler_mode = "max"
+        else:
+            scheduler_mode = "min"
         # the ckpt metric decides on how to find a good early stopping point:
         # ckpts are written when there's a new high/low score for this metric
-        if self.ckpt_metric == "eval_metric":
+        if self.ckpt_metric == "eval_metric" and self.eval_metric in ["bleu", "chrf"]:
             self.best_ckpt_score = -np.inf
             self.is_best = lambda x: x > self.best_ckpt_score
         else:
@@ -192,7 +194,6 @@ class TrainManager:
             self.model.cuda()
         self.logging_freq = train_config.get("logging_freq", 100)
         self.validation_freq = train_config.get("validation_freq", 1000)
-        self.eval_metric = train_config.get("eval_metric", "bleu")
         self.print_valid_sents = train_config["print_valid_sents"]
         self.level = config["data"]["level"]
         self.clip_grad_fun = None
@@ -628,7 +629,7 @@ class TrainManager:
         elif self.schedule_metric in ["ppl", "perplexity"]:
             # schedule based on perplexity
             schedule_score = valid_ppl
-        else:
+        elif self.schedule_metric == "eval_metric":
             # schedule based on evaluation score
             schedule_score = valid_score
 
