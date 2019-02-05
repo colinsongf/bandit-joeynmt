@@ -68,6 +68,7 @@ class RecurrentRegulator(Regulator):
                  output_size,
                  type,
                  hidden_size,
+                 middle_size,
                  src_emb_size,
                  #trg_emb_size,
                  num_layers,
@@ -91,8 +92,12 @@ class RecurrentRegulator(Regulator):
 
         self.rnn_input_dropout = torch.nn.Dropout(p=dropout, inplace=False)
 
+        self.middle_layer = nn.Linear(in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1),
+                                      out_features=middle_size)
+
         self.output_layer = nn.Linear(
-            in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1),
+            in_features=self.middle_layer.out_features,
+            #self.src_rnn.hidden_size*(2 if bidirectional else 1),
                       #  self.trg_rnn.hidden_size*(2 if bidirectional else 1),
             out_features=output_size
         )
@@ -133,8 +138,10 @@ class RecurrentRegulator(Regulator):
         hidden_concat = torch.cat(
             [fwd_hidden_last, bwd_hidden_last], dim=2).squeeze(0)
 
+        middle = torch.tanh(self.middle_layer(hidden_concat))
+
         # TODO activation function?
-        output = self.output_layer(hidden_concat)
+        output = self.output_layer(middle)
 
         return output
 
