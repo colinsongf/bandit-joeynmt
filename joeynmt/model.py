@@ -424,7 +424,7 @@ class Model(nn.Module):
         batch_size = batch.src.size(0)
 
         if not regulate:
-            log_probs = F.log_softmax(decoder_out, dim=-1)
+            log_probs = F.log_softmax(out, dim=-1)
             batch_loss = criterion(
                 input=log_probs.contiguous().view(-1, log_probs.size(-1)),
                 target=batch.trg.contiguous().view(-1)).sum()
