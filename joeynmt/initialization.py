@@ -122,8 +122,9 @@ def initialize_model(model, cfg, src_padding_idx, trg_padding_idx):
         for name, p in model.named_parameters():
 
             # initialize output layer uniformly
-            if "regulator.output_layer.weight" in name:
-                nn.init.uniform_(p, a=-0.001, b=0.001)
+            #if "regulator.output_layer.weight" in name:
+            #    #nn.init.uniform_(p, a=-0.001, b=0.001)
+            #    nn.init.xavier_uniform_(p, gain=gain)
 
             if "embed" in name:
                 embed_init_fn_(p)
