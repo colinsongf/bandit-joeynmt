@@ -31,7 +31,6 @@ class TrainManager:
         :param model:
         :param config:
         """
-        # TODO 2 modes: pre-training, interactive
         train_config = config["training"]
         self.model = model
         self.overwrite = train_config.get("overwrite", False)
@@ -509,16 +508,22 @@ class TrainManager:
 
                         self.model.train()
                         # use validation result to update regulator
-                        if self.baseline:
-                            # TODO either mean
-                            #baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
-                            # TODO or previous
-                            num_previous = len(self.rewards)-1
-                           # baseline_reward = self.rewards[-2] if num_previous > 0 else 0
-                            # TODO or first
-                            # TODO mean of previous x
-                            window_size = 5
-                            baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
+                        if self.baseline is not False:
+                            # either mean
+                            if self.baseline == "mean":
+                                baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
+                            # or previous
+                            elif self.baseline == "previous":
+                                num_previous = len(self.rewards)-1
+                                baseline_reward = self.rewards[-2] if num_previous > 0 else 0
+                            # first
+                            elif self.baseline == "first":
+                                baseline_reward = self.rewards[0] if len(self.rewards) > 0 else 0
+                            # mean of previous x
+                            elif self.baseline == "window":
+                                window_size = 5
+                                num_previous = len(self.rewards)-1
+                                baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
 
                             #print(self.rewards)
                             #print("baseline", baseline_reward)
@@ -582,12 +587,7 @@ class TrainManager:
                         valid_ppl=valid_ppl, store_attention=True,
                         store_outputs=True, valid_start_time=valid_start_time)
 
-            # TODO fix stopping! when budget is consumed
                 if self.stop:
-                    # self.logger.info(
-                    #    'Training ended since minimum lr {} was reached.'.format(
-                    #        self.learning_rate_min))
-                    self.logger.info("Training ended.")
                     break
 
             if self.stop:
@@ -638,7 +638,7 @@ class TrainManager:
 
         if self.scheduler is not None:
             if type(self.scheduler) is dict:
-                # corrector is scheduled after eval metric
+                # regulator is scheduled after eval metric
                 # TODO schedule lr after smth else?
                 if self.loss_weights["regulator"] > 0:
                     self.scheduler["regulator"].step(
@@ -778,12 +778,11 @@ class TrainManager:
     def _train_batch_regulator(self, regulator_log_probs, regulator_pred, reward, update=True):
         # regulator_log_prob*(reward-cost)
         # compute cost
-        # TODO include budget?
         costs = self.model.regulator.get_costs(regulator_pred.detach().cpu().numpy())
         # select correct part of log probs with nll
         #print("reg log prob", regulator_log_probs)
         nll = self.criterion(input=regulator_log_probs.view(regulator_pred.size(0), -1), target=regulator_pred)
-        # TODO fix cost
+        # TODO fix cost: TER or the like
         #print("costs", costs)  # batch_size
         #print(self.budget)
         budget_used = 1-(self.budget/max(self.initial_budget, 1))
@@ -881,7 +880,6 @@ class TrainManager:
                 current_lr = param_group['lr']
 
         if type(current_lr) is dict:
-            # TODO adapt to regulator
             # only stop if all learning rates have reached minimum
             self.stop = all(
                 [v < self.learning_rate_min for v in current_lr.values()])
