@@ -430,7 +430,6 @@ class Model(nn.Module):
                 target=batch.trg.contiguous().view(-1)).sum()
             batch_tokens = batch.ntokens
             batch_seqs = batch.nseqs
-            assert batch_loss.size(0) == 1
             reg_pred = None
             reg_log_probs = None
 
