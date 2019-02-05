@@ -447,7 +447,10 @@ class TrainManager:
             start = time.time()
             total_valid_duration = 0
             processed_tokens = self.total_tokens
-            count = 0
+            count = self.batch_multiplier-1
+            # collect for regulator while update=False
+            all_reg_log_probs = []
+            all_reg_preds = []
 
             for batch_no, batch in enumerate(iter(train_iter), 1):
                 # reactivate training
@@ -457,11 +460,12 @@ class TrainManager:
                 # only update every batch_multiplier batches
                 # see https://medium.com/@davidlmorton/increasing-mini-batch-size-without-increasing-memory-6794e10db672
                 update = count == 0
+
                 # print(count, update, self.steps)
                 batch_loss, reg_log_probs, reg_pred = \
                     self._train_batch_mt(batch, update=update, pred=self.only_sup)
-
-               # print("regulator prediction", reg_pred)
+                all_reg_log_probs.append(reg_log_probs)
+                all_reg_preds.append(reg_pred)
 
                 if reg_pred is not None:
                     self.regulator_outputs.extend(reg_pred.detach().cpu().numpy())
@@ -476,6 +480,7 @@ class TrainManager:
                         self.logger.info("Training ended since budget is consumed.")
 
                     reg_batch_loss = 0
+                    # regulator can only be trained when validation is performed, which only happens after a full batch_multiplier*batch_size batch
                     if self.loss_weights["regulator"] > 0 and update:
                         # TODO what's the validation criterion? instead of BLEU could be regret
                         with torch.no_grad():
@@ -530,10 +535,13 @@ class TrainManager:
                             reward -= baseline_reward
                             #print("reward with baseline", reward)
 
-                        #print("final reward", reward)
-                        reg_batch_loss, entropy, costs = self._train_batch_regulator(
-                            regulator_log_probs=reg_log_probs, regulator_pred=reg_pred,
-                            reward=reward, update=update)
+                        assert len(all_reg_log_probs) == self.batch_multiplier
+                        assert len(all_reg_preds) == self.batch_multiplier
+                        reg_batch_loss, entropy, costs = \
+                            self._train_batch_regulator(
+                                regulator_log_probs=torch.cat(all_reg_log_probs, 0),
+                                regulator_pred=torch.cat(all_reg_preds, 0),
+                                reward=reward, update=update)
                         self.costs.append(costs)
                         self.budget -= sum(costs)
                         # TODO this is not exact
@@ -545,6 +553,11 @@ class TrainManager:
 
                 count = self.batch_multiplier if update else count
                 count -= 1
+
+                # reset collection of reg preds when update has happened
+                if update:
+                    all_reg_log_probs = []
+                    all_reg_preds = []
 
 
                 # log learning progress
