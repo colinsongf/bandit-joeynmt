@@ -312,12 +312,12 @@ class Model(nn.Module):
                         new_rewards = rewards-np.mean(self.rewards)
                     else:
                         new_rewards = rewards
-                    # keep track of original rewards for baseline
-                    self.rewards.extend(rewards)
-                    # make update with baselined rewards
-                    rewards = new_rewards
+                else:
+                    new_rewards = rewards
 
-                chunk_loss = bs_nll.sum(-1)*batch.trg.new(rewards).float()
+                # make update with baselined rewards
+
+                chunk_loss = bs_nll.sum(-1)*batch.trg.new(new_rewards).float()
 
            # print("trg", batch.trg.detach().numpy())
             #print("markings", markings)
@@ -391,7 +391,7 @@ class Model(nn.Module):
             batch_seqs = 0
             # TODO check if losses balanced? norm needed? avg over batch?
             # TODO rather loop over loss and sum
-            #print(reg_pred)
+            print(reg_pred)
             for i, p in enumerate(reg_pred):
                 if p == 0:
                     continue
@@ -406,6 +406,9 @@ class Model(nn.Module):
                         batch_tokens += markings[i].sum()
                     elif chunk_type == "sbleu" or chunk_type == "ster":
                         batch_tokens += curr_hyp[i].size
+                    # keep track of original rewards for baseline
+                    if weak_baseline:
+                        self.rewards.append(rewards[i])
                 elif p == 3:
                     batch_loss += pe_loss[i]
                     batch_seqs += 1
