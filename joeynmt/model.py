@@ -392,7 +392,7 @@ class Model(nn.Module):
                     batch_seqs += 1
                     if chunk_type == "marking":
                         batch_tokens += markings[i].sum()
-                    elif chunk_type == "sbleu":
+                    elif chunk_type == "sbleu" or chunk_type == "ster":
                         batch_tokens += curr_hyp[i].size
                 elif p == 3:
                     batch_loss += pe_loss[i]
