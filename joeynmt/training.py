@@ -56,16 +56,16 @@ class TrainManager:
                 {k: v for (k, v) in all_params if
                  "reg" in k}.items())  # if "corrector" in key
             self.regulator_params = OrderedDict(sorted_reg)
-            self.logger.debug(
+            self.logger.info(
                 "REGULATOR PARAMS: {}".format(self.regulator_params.keys()))
-            self.logger.debug("REGULATOR size: {}".format(
+            self.logger.info("REGULATOR size: {}".format(
                 sum([np.prod(p.size()) for p in self.regulator_params.values()])
             ))
             sorted_mt = sorted(
                 {k: v for (k, v) in all_params if "reg" not in k}.items())
             self.mt_params = OrderedDict(sorted_mt)
-            self.logger.debug("MT PARAMS: {}".format(self.mt_params.keys()))
-            self.logger.debug("MT size: {}".format(
+            self.logger.info("MT PARAMS: {}".format(self.mt_params.keys()))
+            self.logger.info("MT size: {}".format(
                 sum([np.prod(p.size()) for p in self.mt_params.values()])))
 
             for k, v in model.named_parameters():
@@ -91,14 +91,22 @@ class TrainManager:
                     self.regulator_params.values(), weight_decay=weight_decay,
                     lr=self.learning_rate["regulator"])
         else:
+            all_params = list(model.named_parameters())
+            sorted_mt = sorted({k: v for (k, v) in all_params}.items())
+            self.mt_params = OrderedDict(sorted_mt)
+            self.logger.info("MT PARAMS: {}".format(self.mt_params.keys()))
+            self.logger.info("MT size: {}".format(
+                sum([np.prod(p.size()) for p in self.mt_params.values()])))
+
+            # order is needed for reloading a different model
             if train_config["optimizer"].lower() == "adam":
                 self.optimizer = torch.optim.Adam(
-                    model.parameters(), weight_decay=weight_decay,
+                    self.mt_params.values(), weight_decay=weight_decay,
                     lr=self.learning_rate)
             else:
                 # default
                 self.optimizer = torch.optim.SGD(
-                    model.parameters(), weight_decay=weight_decay,
+                    self.mt_params.values(), weight_decay=weight_decay,
                     lr=self.learning_rate)
         self.eval_metric = train_config.get("eval_metric", "bleu")
         self.schedule_metric = train_config.get("schedule_metric",
@@ -296,25 +304,56 @@ class TrainManager:
                 # if regulator params are different shape or don't exist: initialize newly
                 if "reg" in name:
                     # regulator param
+                    # params that are in loaded model but not in current model
                     if name not in curr_state_dict:
                         self.logger.info("Skipping loading of {}".format(name))
                         continue
+                    # params that have different shapes
                     elif curr_state_dict[name].shape != param.shape:
-                        self.logger.info("Shape mismatch for param {}: old {}, new {}. Initializing uniformly.".format(name, param.shape, curr_state_dict[name].shape))
-                        # TODO diff init?
-                        scale = 0.1
-                        init = lambda p: nn.init.uniform_(p, a=-scale, b=scale)
+                        self.logger.info(
+                            "Shape mismatch for param {}: old {}, new {}. "
+                            "Initializing randomly.".format(
+                                name, param.shape, curr_state_dict[name].shape))
                         if "output_layer" in name:
-                            print(self.model.regulator.output_layer.weight)
                             obj = self.model.regulator.output_layer
-                            # TODO also adapt optimizer
-
-                            new_param_dict[name] = init(torch.empty_like(getattr(obj, name.split(".")[-1])))
+                           # print(getattr(obj, name.split(".")[-1]))
+                            new_param_dict[name] = getattr(obj, name.split(".")[-1]) #init(torch.empty_like(getattr(obj, name.split(".")[-1])))
+                        elif "src_rnn" in name:
+                            obj = self.model.regulator.src_rnn
+                            new_param_dict[name] = getattr(obj,
+                                                           name.split(".")[-1])
+                        elif "middle_layer" in name:
+                            obj = self.model.regulator.middle_layer
+                            new_param_dict[name] = getattr(obj,
+                                                           name.split(".")[-1])
                     else:
                         new_param_dict[name] = param
                 else:
                     # standard loading
                     new_param_dict[name] = param
+
+            # now add params that are not there yet
+            for name, param in curr_state_dict.items():
+                if name not in new_param_dict.keys():
+                    self.logger.info("{} doesn't exist in loaded checkpoint. Initializing randomly.".format(name))
+                    if "output_layer" in name:
+                        obj = self.model.regulator.output_layer
+                        # print(getattr(obj, name.split(".")[-1]))
+                        new_param_dict[name] = getattr(obj, name.split(".")[
+                            -1])  # init(torch.empty_like(getattr(obj, name.split(".")[-1])))
+                    elif "src_rnn" in name:
+                        obj = self.model.regulator.src_rnn
+                        new_param_dict[name] = getattr(obj,
+                                                       name.split(".")[-1])
+                    elif "middle_layer" in name:
+                        obj = self.model.regulator.middle_layer
+                        new_param_dict[name] = getattr(obj,
+                                                       name.split(".")[-1])
+                    elif "reg_src_embed.lut" in name:
+                        obj = self.model.reg_src_embed.lut
+                        new_param_dict[name] = getattr(obj,
+                                                       name.split(".")[-1])
+
             self.model.load_state_dict(new_param_dict)
         else:
             self.model.load_state_dict(model_checkpoint["model_state"])
@@ -326,6 +365,7 @@ class TrainManager:
             if "mt_optimizer_state" in model_checkpoint:
                 self.optimizer["mt"].load_state_dict(
                     model_checkpoint["mt_optimizer_state"])
+                self.logger.info(self.optimizer["mt"])
             # loaded model didn't have a regulator
             elif "optimizer_state" in model_checkpoint:
                 self.optimizer["mt"].load_state_dict(
