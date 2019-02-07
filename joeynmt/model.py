@@ -256,7 +256,11 @@ class Model(nn.Module):
         assert self_sup_loss.size(0) == selected_batch_size
         return self_sup_loss.sum(), selected_tokens, selected_batch_size
 
-    def _weak_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, chunk_type, criterion, target, level, weak_baseline=True, temperature=1.0):
+    def _weak_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask,
+                       max_output_length, chunk_type, criterion, target, level,
+                       weak_baseline=True, weak_temperature=1.0,
+                       weak_search="sample",
+                       beam_size=10, beam_alpha=1.0):
         """
         Compute weakly-supervised loss for selected inputs
 
@@ -276,12 +280,34 @@ class Model(nn.Module):
         selected_trg = torch.index_select(target, index=selection, dim=0)
         trg_np = selected_trg.detach().cpu().numpy()
 
-        sample_hyp, _ = sample(encoder_output=selected_encoder_out,
-                             encoder_hidden=selected_encoder_hidden,
-                             src_mask=selected_src_mask, embed=self.trg_embed,
-                             max_output_length=max_output_length,
-                             bos_index=self.bos_index,
-                             decoder=self.decoder, temperature=temperature)
+        if weak_search == "sample":
+            sample_hyp, _ = sample(encoder_output=selected_encoder_out,
+                                 encoder_hidden=selected_encoder_hidden,
+                                 src_mask=selected_src_mask, embed=self.trg_embed,
+                                 max_output_length=max_output_length,
+                                 bos_index=self.bos_index,
+                                 decoder=self.decoder, temperature=weak_temperature)
+
+        elif weak_search == "beam":
+            sample_hyp, _ = beam_search(size=beam_size,
+                                    encoder_output=selected_encoder_out,
+                                    encoder_hidden=selected_encoder_hidden,
+                                    src_mask=selected_src_mask,
+                                    embed=self.trg_embed,
+                                    max_output_length=max_output_length,
+                                    alpha=beam_alpha,
+                                    eos_index=self.eos_index,
+                                    pad_index=self.pad_index,
+                                    bos_index=self.bos_index,
+                                    decoder=self.decoder)
+        else:  # greedy
+            sample_hyp, _ = greedy(encoder_output=selected_encoder_out,
+                                   encoder_hidden=selected_encoder_hidden,
+                                   src_mask=selected_src_mask,
+                                   embed=self.trg_embed,
+                                   max_output_length=max_output_length,
+                                   bos_index=self.bos_index,
+                                   decoder=self.decoder)
 
         selected_batch_size = selection.shape[0]
         sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
@@ -408,7 +434,8 @@ class Model(nn.Module):
 
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
                            max_output_length=100, chunk_type="marking", level="word",
-                           entropy=False, search="beam", weak_baseline=True):
+                           entropy=False, weak_search="sample", weak_baseline=True,
+                           weak_temperature=1.0):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -486,7 +513,8 @@ class Model(nn.Module):
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
                     max_output_length=max_output_length, criterion=criterion,
                     chunk_type=chunk_type, level=level,
-                    target=batch.trg, temperature=1.0,
+                    target=batch.trg, weak_temperature=weak_temperature,
+                    weak_search=weak_search,
                     weak_baseline=weak_baseline)
                 #print("weak sup selected", weak_sup_loss_selected)
                 batch_loss += weak_sup_loss_selected.sum()
