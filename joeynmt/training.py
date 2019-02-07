@@ -48,6 +48,7 @@ class TrainManager:
         weight_decay = train_config.get("weight_decay", 0)
 
         if model.regulator is not None:
+            self.init_from_mt = train_config.get("init_from_mt", False)
             # 2 sets of parameters -> 2 optimizers
             # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice
             all_params = list(model.named_parameters())
@@ -294,6 +295,8 @@ class TrainManager:
         # restore model and optimizer parameters
         #self.model.load_state_dict(model_checkpoint["model_state"])
 
+        # TODO initialize embeddings and src encoder with MT params if possible
+
         # restore model
         param_dict = model_checkpoint["model_state"]
 
@@ -326,6 +329,11 @@ class TrainManager:
                             obj = self.model.regulator.middle_layer
                             new_param_dict[name] = getattr(obj,
                                                            name.split(".")[-1])
+                        elif "reg_src_embed.lut" in name:
+                            obj = self.model.reg_src_embed.lut
+                            new_param_dict[name] = getattr(obj,
+                                                           name.split(".")[-1])
+
                     else:
                         new_param_dict[name] = param
                 else:
@@ -345,14 +353,21 @@ class TrainManager:
                         obj = self.model.regulator.src_rnn
                         new_param_dict[name] = getattr(obj,
                                                        name.split(".")[-1])
+                        # TODO also init src from MT
                     elif "middle_layer" in name:
                         obj = self.model.regulator.middle_layer
                         new_param_dict[name] = getattr(obj,
                                                        name.split(".")[-1])
                     elif "reg_src_embed.lut" in name:
-                        obj = self.model.reg_src_embed.lut
-                        new_param_dict[name] = getattr(obj,
-                                                       name.split(".")[-1])
+                        if param_dict["src_embed.lut.weight"].shape == self.model.reg_src_embed.lut.weight.shape and self.init_from_mt:
+                            self.logger.info("Initializing regulator embeddings from MT embeddings.")
+                            new_param_dict[name] = param_dict["src_embed.lut.weight"]
+
+                        else:
+                            obj = self.model.reg_src_embed.lut
+                            new_param_dict[name] = getattr(obj,
+                                                           name.split(".")[-1])
+
 
             self.model.load_state_dict(new_param_dict)
         else:

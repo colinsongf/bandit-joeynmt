@@ -37,17 +37,17 @@ training:
     decrease_factor: 0.5
     schedule_after_loss: True
     epochs: 10
-    validation_freq: 1000
+    validation_freq: 500
     logging_freq: 100
     eval_metric: "bleu"
-    model_dir: "reverse_regulated_weak_sample"
+    model_dir: "reverse" #_regulated"
     overwrite: True
     shuffle: True
     use_cuda: False
     max_output_length: 11
     print_valid_sents: 3
     loss_weights: {"mt": 1.0, "regulator": 1.0}
-   # load_model: "reverse_regulated_weak_sample/10.ckpt"
+    load_model: "reverse/1000.ckpt"
     baseline: "window"  # mean, first, previous, False  # baseline reward for regulator
     weak_baseline: True
     search: "beam"
@@ -59,6 +59,7 @@ training:
     chunk_type: "sbleu"  # marking
     self_entropy: False # encourage high entropy for self-training
     weak_baseline: True
+    init_from_mt: True
 
 model:
     initializer: "xavier"
@@ -93,8 +94,8 @@ model:
         embeddings:
             embedding_dim: 16
             scale: False
-        hidden_size: 64
-        middle_size: 32
+        hidden_size: 63
+        middle_size: 31
         dropout: 0.1
         output_size: 4
         num_layers: 2
