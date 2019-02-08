@@ -279,6 +279,7 @@ class Model(nn.Module):
         selected_src_mask = torch.index_select(src_mask, index=selection, dim=0)
         selected_trg = torch.index_select(target, index=selection, dim=0)
         trg_np = selected_trg.detach().cpu().numpy()
+        selected_batch_size = selection.shape[0]
 
         if weak_search == "sample":
             sample_hyp, _ = sample(encoder_output=selected_encoder_out,
@@ -309,7 +310,6 @@ class Model(nn.Module):
                                    bos_index=self.bos_index,
                                    decoder=self.decoder)
 
-        selected_batch_size = selection.shape[0]
         sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
                              fill_value=self.pad_index)
         for i, row in enumerate(sample_hyp):
@@ -338,6 +338,19 @@ class Model(nn.Module):
             input=sample_log_probs.contiguous().view(-1, sample_log_probs.size(-1)),
             target=sample_target.view(-1))
 
+        # decode reference
+        join_char = " " if level in ["word", "bpe"] else ""
+        refs_np_decoded = [join_char.join(t) for t in
+                          arrays_to_sentences(arrays=trg_np,
+                                              vocabulary=self.trg_vocab,
+                                              cut_at_eos=True)]
+
+        # decode hypothesis
+        hyps_decoded = [join_char.join(t) for t in
+                       arrays_to_sentences(arrays=sample_hyp,
+                                              vocabulary=self.trg_vocab,
+                                              cut_at_eos=True)]
+
         if chunk_type == "marking":
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
             # 1 if correct, 0 if incorrect
@@ -357,34 +370,46 @@ class Model(nn.Module):
                 markings).float()).sum(1)
             selected_tokens = markings.sum()
 
+        elif chunk_type == "match":
+            # 1 if occurs in reference, 0 if it doesn't
+            # position-independent
+            matches = np.zeros_like(sample_hyp_pad, dtype=float)
+            for i, row in enumerate(sample_hyp):
+                for j, val in enumerate(row):
+                    # skip to next row if pad reached
+                    if val == self.pad_index:
+                        break
+                    try:
+                        if val in trg_np[i]:
+                            matches[i, j] = 1.
+                    except IndexError:  # BS is longer than trg
+                        continue
+                    # skip to next row if eos has been marked
+                    if val == self.eos_index:
+                        break
+#            print("hyp", sample_hyp_pad)
+#            print("ref", trg_np)
+#            print("matches", matches)
+            chunk_loss = (
+            sample_nll.view(selected_batch_size, -1) * src_mask.new(
+                matches).float()).sum(1)
+            selected_tokens = matches.sum()
+
         else:
             # use same reward for all the tokens
             if chunk_type == "sbleu":
-                # decode hypothesis and target
-                join_char = " " if level in ["word", "bpe"] else ""
-                bs_hyp_decoded = [join_char.join(t) for t in
-                                  arrays_to_sentences(arrays=sample_hyp,
-                                                      vocabulary=self.trg_vocab,
-                                                      cut_at_eos=True)]
-                trg_np_decoded = [join_char.join(t) for t in
-                                  arrays_to_sentences(arrays=trg_np,
-                                                      vocabulary=self.trg_vocab,
-                                                      cut_at_eos=True)]
-                assert len(trg_np_decoded) == len(bs_hyp_decoded)
+                assert len(refs_np_decoded) == len(hyps_decoded)
                 # compute sBLEUs
-                sbleus = np.array(sbleu(bs_hyp_decoded, trg_np_decoded))
+                sbleus = np.array(sbleu(hyps_decoded, refs_np_decoded))
                 rewards = 1 - sbleus
 
             elif chunk_type == "ster":
                 # decode hypothesis and target
-                bs_hyp_decoded_list = arrays_to_sentences(arrays=sample_hyp,
-                                                          vocabulary=self.trg_vocab,
-                                                          cut_at_eos=True)
-                trg_np_decoded_list = arrays_to_sentences(arrays=trg_np,
-                                                          vocabulary=self.trg_vocab,
-                                                          cut_at_eos=True)
-                assert len(trg_np_decoded_list) == len(bs_hyp_decoded_list)
-                sters = np.array(ster(bs_hyp_decoded_list, trg_np_decoded_list))
+                # first merge BPEs, then split at white space
+                hyp_decoded_list = [t.split(" ") for t in hyps_decoded]
+                trg_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
+                assert len(trg_np_decoded_list) == len(hyp_decoded_list)
+                sters = np.array(ster(hyp_decoded_list, trg_np_decoded_list))
                 rewards = sters
 
             if weak_baseline:
@@ -402,10 +427,34 @@ class Model(nn.Module):
             # make update with baselined rewards
             chunk_loss = sample_nll.sum(-1) * src_mask.new(new_rewards).float()
 
-        assert chunk_loss.size(0) == selected_batch_size
-        return chunk_loss.sum(), selected_tokens, selected_batch_size
+        # compute cost
+        # word-based -> need to decode
+        # how many words occur do not occur in the hyp? = #markings
+        # ratio: #markings/hyp_len
+        # or rather absolute?
+        # TODO maybe add 1 as constant since "accept" if not any error
+        costs = []
+        #print("refs", refs_np_decoded)
+        #print("hyps", hyps_decoded)
+        for ref_decoded, hyp_decoded in zip(refs_np_decoded, hyps_decoded):
+            cost_hyp = 0
+            for hyp_token in hyp_decoded.split(" "):
+                if hyp_token not in ref_decoded.split(" "):
+                    cost_hyp += 1
+                else:
+                    continue
+            #print("pair + cost:", ref_decoded,"---", hyp_decoded, "---", cost_hyp)
+            costs.append(cost_hyp)
+        #print(costs)
+        assert len(costs) == selected_batch_size
 
-    def _full_sup_loss(self, selection, decoder_out, criterion, target):
+        assert chunk_loss.size(0) == selected_batch_size
+        return chunk_loss.sum(), selected_tokens, selected_batch_size, costs
+
+    def _full_sup_loss(self, selection, decoder_out, criterion, target,
+                       batch_src_mask, max_output_length, encoder_hidden,
+                       encoder_out, level,
+                       beam_size=10, beam_alpha=1.0):
         """
         Compute the loss for fully-supervised training for the given selection
         of indices of the batch
@@ -419,7 +468,13 @@ class Model(nn.Module):
         selected_target = torch.index_select(target, index=selection, dim=0)
         selected_decoder_out = torch.index_select(decoder_out, index=selection,
                                                   dim=0)
+        selected_encoder_hidden = torch.index_select(encoder_hidden,
+                                                     index=selection, dim=0)
+        selected_encoder_out = torch.index_select(encoder_out, index=selection,
+                                                  dim=0)
         selected_batch_size = selection.shape[0]
+        selected_src_mask = torch.index_select(batch_src_mask,
+                                               index=selection, dim=0)
         selected_tokens = (selected_target != self.pad_index).sum().cpu().numpy()
 
         # compute log probs of teacher-forced decoder for fully-supervised training
@@ -429,8 +484,35 @@ class Model(nn.Module):
             input=tf_log_probs.contiguous().view(-1, tf_log_probs.size(-1)),
             target=selected_target.contiguous().view(-1)).view(selected_batch_size, -1).sum(-1)
 
+        # decode
+        # post-edit: reference
+        # hyp: beam search
+        selected_output, _ = \
+            beam_search(size=beam_size, encoder_output=selected_encoder_out,
+                        encoder_hidden=selected_encoder_hidden,
+                        src_mask=selected_src_mask, embed=self.trg_embed,
+                        max_output_length=max_output_length,
+                        alpha=beam_alpha, eos_index=self.eos_index,
+                        pad_index=self.pad_index, bos_index=self.bos_index,
+                        decoder=self.decoder)
+
+        join_char = " " if level in ["word", "bpe"] else ""
+
+        decoded_ref_list = [join_char.join(t).split(" ") for t in arrays_to_sentences(selected_target,
+                                          vocabulary=self.trg_vocab)]
+        #print("decoded_ref", decoded_ref)
+        decoded_hyp_list = [join_char.join(t).split(" ") for t in arrays_to_sentences(selected_output,
+                                          vocabulary=self.trg_vocab)]
+        # compute cost: TER*ref_len -> absolute number of edits
+        #print("decoded_hyp", decoded_hyp)
+        ters = ster(hypotheses=decoded_hyp_list, references=decoded_ref_list)
+        #print("ters", ters)
+        ref_lens = [len(t) for t in decoded_ref_list]
+        #print("ref lens", ref_lens)
+        costs = [r*c for r, c in zip(ters, ref_lens)]
+        #print("#edits", costs)
         assert full_sup_loss.size(0) == selected_batch_size
-        return full_sup_loss.sum(), selected_tokens, selected_batch_size
+        return full_sup_loss.sum(), selected_tokens, selected_batch_size, costs
 
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
                            max_output_length=100, chunk_type="marking", level="word",
@@ -443,7 +525,6 @@ class Model(nn.Module):
         :param criterion:
         :return:
         """
-        # TODO if there is no regutor, predictions of it are always 3 -> generalize code
         encoder_out, encoder_hidden, decoder_out = \
             self.forward(src=batch.src, trg_input=batch.trg_input,
                          src_mask=batch.src_mask, src_lengths=batch.src_lengths)
@@ -459,6 +540,7 @@ class Model(nn.Module):
             batch_seqs = batch.nseqs
             reg_pred = None
             reg_log_probs = None
+            batch_costs = None
 
         else:
             # with regulator
@@ -485,12 +567,14 @@ class Model(nn.Module):
             batch_loss = 0
             batch_tokens = 0
             batch_seqs = 0
+            batch_costs = regulator_out.new_zeros(batch_size)
 
             # split up the batch and sum the individual losses
             if 0 in reg_pred:
                 # skip those: no loss
                 zeros = torch.eq(reg_pred, 0)
                 zeros_idx = zeros.nonzero().squeeze(1)
+                # no cost
             if 1 in reg_pred:
                 ones = torch.eq(reg_pred, 1)
                 ones_idx = ones.nonzero().squeeze(1)
@@ -503,12 +587,13 @@ class Model(nn.Module):
                 batch_loss += self_sup_loss_selected.sum()
                 batch_tokens += tokens
                 batch_seqs += seqs
+                # no cost
 
             if 2 in reg_pred:
                 # compute weak-sup. loss for those
                 twos = torch.eq(reg_pred, 2)
                 twos_idx = twos.nonzero().squeeze(1)
-                weak_sup_loss_selected, tokens, seqs = self._weak_sup_loss(
+                weak_sup_loss_selected, tokens, seqs, costs = self._weak_sup_loss(
                     selection=twos_idx, encoder_out=encoder_out,
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
                     max_output_length=max_output_length, criterion=criterion,
@@ -520,23 +605,34 @@ class Model(nn.Module):
                 batch_loss += weak_sup_loss_selected.sum()
                 batch_tokens += tokens
                 batch_seqs += seqs
+                # get cost: number of words that need to be marked (incorrect)
+                # write at the right position of cost vector
+                batch_costs[twos_idx] = batch_costs.new(costs)
 
             if 3 in reg_pred:
                 # compute fully-sup. loss for those
                 threes = torch.eq(reg_pred, 3)
                 threes_idx = threes.nonzero().squeeze(1)
-                full_sup_loss_selected, tokens, seqs = self._full_sup_loss(
+                full_sup_loss_selected, tokens, seqs, costs = self._full_sup_loss(
                     selection=threes_idx, decoder_out=out,
-                    criterion=criterion, target=batch.trg)
+                    criterion=criterion, target=batch.trg,
+                    encoder_hidden=encoder_hidden, level=level,
+                    encoder_out=encoder_out, max_output_length=max_output_length,
+                    batch_src_mask=batch.src_mask)
                # print("full sup selected", full_sup_loss_selected)
                 batch_loss += full_sup_loss_selected
                 batch_tokens += tokens
                 batch_seqs += seqs
+                # get cost: # edits needed in hyp
+                # write at the right position of cost vector
+                batch_costs[threes_idx] = batch_costs.new(costs)
 
             if type(batch_loss) == int:  # no update for batch
                 batch_loss = None
 
-        return batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs
+       # print("TOTAL COST", batch_costs)
+        return batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs, \
+               batch_costs
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """

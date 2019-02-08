@@ -21,42 +21,6 @@ class Regulator(nn.Module):
         self.src_emb_size = src_emb_size
         #self.trg_emb_size = trg_emb_size
 
-    def get_costs(self, pred):
-        """
-        Compute the cost for a prediction
-        score between 0 and 1
-
-        :param pred:
-        :return:
-        """
-        #print("HERE")
-        #print("pred", pred)
-        # TODO make more sophisticated
-        cost_dict = {0: 0, 1: 0, 2: 0.5, 3: 1}
-        # one cost for every prediction
-        total_cost = 0
-        #for p in pred:
-        #    if p == 0:
-        #        total_cost += 0
-        #    elif p == 1:
-        #        total_cost += 1
-        #    elif p == 2:
-        #        total_cost += 2
-        #    elif p == 3:
-        #        total_cost += 3
-        total_cost = np.array([cost_dict[p] for p in pred])
-        #max_cost = 3
-        #total_cost = pred/max_cost
-        #print("total cost", total_cost)
-        # what's the cost for each type of feedback?
-        # no update: no cost
-        # weak feedback: accuracy
-        # post-edit: TER
-        # TODO pass output here to compute cost
-        # or compute cost before and just do the weighting here?
-        return total_cost
-
-
 class RecurrentRegulator(Regulator):
     """
     Recurrent regulator model that predicts a feedback mode
@@ -158,16 +122,16 @@ class AttentionalRegulator(Regulator):
        Attentional regulator model that predicts a feedback mode
        """
 
-    def __init__(self, emb_size, output_size):
-        super(AttentionalRegulator, self).__init__(emb_size=emb_size,
-                                                   output_size=output_size)
+    def __init__(self, src_embed_size, output_size):
+        super(AttentionalRegulator, self).__init__(output_size=output_size,
+                                                   src_emb_size=src_embed_size)
 
 class ConvolutionalRegulator(Regulator):
     """
     Convolutional regulator model that predicts a feedback mode
     """
 
-    def __init__(self, emb_size, output_size):
-        super(ConvolutionalRegulator, self).__init__(emb_size=emb_size,
+    def __init__(self, src_emb_size, output_size):
+        super(ConvolutionalRegulator, self).__init__(src_emb_size=src_emb_size,
                                                      output_size=output_size)
 
