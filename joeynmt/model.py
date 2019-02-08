@@ -393,7 +393,35 @@ class Model(nn.Module):
             chunk_loss = (
             sample_nll.view(selected_batch_size, -1) * src_mask.new(
                 matches).float()).sum(1)
-            selected_tokens = matches.sum()
+
+        elif chunk_type == "lcs":
+            #def token_lcs_reward(gold, pred):
+            # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
+            # idea from http://www.aclweb.org/anthology/P18-2052
+             # TODO adapt to all longest substrings
+             #def longest_common_substring_rewards(pred, gold):
+             #   m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
+             #   longest, x_longest = 0, 0
+             #   rewards = np.zeros(len(pred))
+             #   for x in range(1, 1 + len(pred)):
+             #       for y in range(1, 1 + len(gold)):
+             #           if pred[x - 1] == gold[y - 1]:
+             #               m[x][y] = m[x - 1][y - 1] + 1
+             #               if m[x][y] > longest:
+             #                   longest = m[x][y]
+             #                   x_longest = x
+             #           else:
+             #               m[x][y] = 0
+             #   rewards[x_longest - longest: x_longest] = 1
+             #   #return pred[x_longest - longest: x_longest]
+             #   return rewards
+            #all_rewards = np.zeros_like(pred, dtype=float)
+            #for j, (g, p) in enumerate(zip(gold, pred)):  # iterate over batch
+            #    r = longest_common_substring_rewards(p, g)
+            #    all_rewards[j] += r
+            #return all_rewards
+            # TODO
+            pass
 
         else:
             # use same reward for all the tokens
@@ -423,7 +451,6 @@ class Model(nn.Module):
             else:
                 new_rewards = rewards
 
-            selected_tokens = sample_hyp.size
             # make update with baselined rewards
             chunk_loss = sample_nll.sum(-1) * src_mask.new(new_rewards).float()
 
@@ -447,6 +474,7 @@ class Model(nn.Module):
             costs.append(cost_hyp)
         #print(costs)
         assert len(costs) == selected_batch_size
+        selected_tokens = sample_hyp.size
 
         assert chunk_loss.size(0) == selected_batch_size
         return chunk_loss.sum(), selected_tokens, selected_batch_size, costs

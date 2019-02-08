@@ -55,7 +55,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
                 batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs, batch_costs = \
                     model.get_loss_for_batch(batch, criterion=criterion,
                                              max_output_length=max_output_length,
-                                             search="beam")
+                                             weak_search="beam")
                 total_loss += batch_loss
                 total_ntokens += batch.ntokens
 

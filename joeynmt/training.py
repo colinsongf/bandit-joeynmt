@@ -235,8 +235,8 @@ class TrainManager:
         self.total_cost = 0 #train_config.get("budget", 0)
         self.baseline = train_config.get("baseline", False)
         self.entropy_regularizer = train_config.get("entropy_regularizer", 0)
-        self.cost_weight = train_config.get("cost_weight", 0.5)
-        assert 1 > self.cost_weight > 0
+        self.cost_weight = train_config.get("cost_weight", 1.0)
+        #assert 1 > self.cost_weight > 0
         #self.logger.info("Initial budget: {}".format(self.budget))
         self.rewards = []
         #self.budgeted_cost = train_config.get("budgeted_cost", False)
@@ -556,7 +556,6 @@ class TrainManager:
                                     criterion=None)
                         #print("reward", valid_score_immediate)
                         reward = valid_score_immediate/100
-                        self.rewards.append(reward)
 
                         total_valid_duration = self.process_validation(
                             epoch_no=epoch_no, valid_hypotheses=None,
@@ -572,27 +571,27 @@ class TrainManager:
                         self.model.train()
                         # use validation result to update regulator
 
-                        # TODO include cost in reward!
-                        if self.baseline is not False:
-                            # either mean
-                            if self.baseline == "mean":
-                                baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
-                            # or previous
-                            elif self.baseline == "previous":
-                                num_previous = len(self.rewards)-1
-                                baseline_reward = self.rewards[-2] if num_previous > 0 else 0
-                            # first
-                            elif self.baseline == "first":
-                                baseline_reward = self.rewards[0] if len(self.rewards) > 0 else 0
-                            # mean of previous x
-                            elif self.baseline == "window":
-                                window_size = 5
-                                num_previous = len(self.rewards)-1
-                                baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
+                        # TODO include cost in reward baseline!
+                        #if self.baseline is not False:
+                        #    # either mean
+                        #    if self.baseline == "mean":
+                        #        baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
+                        #    # or previous
+                        #    elif self.baseline == "previous":
+                        #        num_previous = len(self.rewards)-1
+                        #        baseline_reward = self.rewards[-2] if num_previous > 0 else 0
+                        #    # first
+                        #    elif self.baseline == "first":
+                        #        baseline_reward = self.rewards[0] if len(self.rewards) > 0 else 0
+                        #    # mean of previous x
+                        #    elif self.baseline == "window":
+                        #        window_size = 5
+                        #        num_previous = len(self.rewards)-1
+                        #        baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
 
                             #print(self.rewards)
-                            #print("baseline", baseline_reward)
-                            reward -= baseline_reward
+                        #    #print("baseline", baseline_reward)
+                        #    reward -= baseline_reward
                             #print("reward with baseline", reward)
 
                         assert len(all_reg_log_probs) == self.batch_multiplier
@@ -792,8 +791,8 @@ class TrainManager:
                         weak_temperature=self.weak_temperature)
 
         if batch_loss is None:
-            # if no supervision is chosen for whole batch
-            return None, regulator_out, regulator_pred
+            # if no supervision is chosen for whole batch -> no cost
+            return None, regulator_out, regulator_pred, regulator_pred.new(regulator_pred.size()).zero_().float()
 
         # normalize batch loss
         # counts might be adapted since parts of batch are ignored through reg. choice
@@ -877,11 +876,17 @@ class TrainManager:
         #trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
         # TODO different combination?
         # TODO check signs are correct
-        self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
-        trade_off = self.cost_weight*costs - reward
-        self.logger.info("trade_off: {}".format(trade_off))
+        self.logger.debug("COST: {}, REWARD: {}".format(costs, reward))
+        self.logger.debug("PREDS: {}".format(regulator_pred))
+        trade_off = reward - self.cost_weight*costs
+        self.logger.debug("trade_off: {}".format(trade_off))
+        if self.baseline and len(self.rewards) > 0:
+            self.logger.debug("MEAN BASELINE: {}".format(np.mean(self.rewards)))
+            trade_off = trade_off - trade_off.new([np.mean(self.rewards)])
+            self.logger.debug("trade_off-BL: {}".format(trade_off))
+        self.rewards.append(trade_off.cpu().numpy().mean())
 
-        reg_loss = torch.mul(nll, regulator_log_probs.new(trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
+        reg_loss = torch.mul(nll, regulator_log_probs.new(-trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
         #print("loss", reg_loss) # batch_size
 
         entropy = 0
