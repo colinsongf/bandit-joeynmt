@@ -232,15 +232,14 @@ class TrainManager:
         # statistics for regulation
         # TODO load them from previous model
         self.regulator_outputs = []
-        self.budget = train_config.get("budget", 0)
-        self.initial_budget = self.budget
+        self.total_cost = 0 #train_config.get("budget", 0)
         self.baseline = train_config.get("baseline", False)
         self.entropy_regularizer = train_config.get("entropy_regularizer", 0)
         self.cost_weight = train_config.get("cost_weight", 0.5)
         assert 1 > self.cost_weight > 0
-        self.logger.info("Initial budget: {}".format(self.budget))
+        #self.logger.info("Initial budget: {}".format(self.budget))
         self.rewards = []
-        self.budgeted_cost = train_config.get("budgeted_cost", False)
+        #self.budgeted_cost = train_config.get("budgeted_cost", False)
         self.only_sup = train_config.get("only_sup", False)
         self.chunk_type = train_config.get("chunk_type", "marking")
         self.logger.info("Learning with feedback of type {}".format(
@@ -532,10 +531,11 @@ class TrainManager:
 
                 reg_batch_loss = None
                 if self.model.regulator is not None:
-                    # TODO this is not exact
-                    if self.budget < 0:
-                        self.stop = True
-                        self.logger.info("Training ended since budget is consumed.")
+                    # now without fixed budget
+                    # # TODO this is not exact
+                    # if self.budget < 0:
+                    #     self.stop = True
+                    #     self.logger.info("Training ended since budget is consumed.")
 
                     reg_batch_loss = 0
                     # regulator can only be trained when validation is performed, which only happens after a full batch_multiplier*batch_size batch
@@ -571,6 +571,8 @@ class TrainManager:
 
                         self.model.train()
                         # use validation result to update regulator
+
+                        # TODO include cost in reward!
                         if self.baseline is not False:
                             # either mean
                             if self.baseline == "mean":
@@ -596,17 +598,18 @@ class TrainManager:
                         assert len(all_reg_log_probs) == self.batch_multiplier
                         assert len(all_reg_preds) == self.batch_multiplier
                         assert len(batch_costs) == self.batch_multiplier
+                        all_costs = torch.cat(batch_costs, 0)
                         reg_batch_loss, entropy = \
                             self._train_batch_regulator(
                                 regulator_log_probs=torch.cat(all_reg_log_probs, 0),
                                 regulator_pred=torch.cat(all_reg_preds, 0),
-                                reward=reward, update=update, costs=torch.cat(batch_costs, 0))
+                                reward=reward, update=update, costs=all_costs)
                         batch_costs = []
-                        self.budget -= sum(costs)
+                        self.total_cost += all_costs.sum()
                         # TODO this is not exact
-                        if self.budget < 0:
-                            self.stop = True
-                            self.logger.info("Training ended since budget is consumed.")
+                        #if self.budget < 0:
+                        #    self.stop = True
+                        #    self.logger.info("Training ended since budget is consumed.")
 
                     #print("reg batch loss", reg_batch_loss)
 
@@ -626,10 +629,10 @@ class TrainManager:
                     elapsed_tokens = self.total_tokens - processed_tokens
                     self.logger.info(
                         "Epoch {} Step: {} MT Loss: {} Reg Loss: {} Reg Entropy: {} "
-                        "Tokens per Sec: {}".format(
+                        "Tokens per Sec: {}. Total cost: {}".format(
                             epoch_no + 1, self.steps, batch_loss, reg_batch_loss,
                             entropy,
-                            elapsed_tokens / elapsed))
+                            elapsed_tokens / elapsed, self.total_cost))
                     start = time.time()
                     total_valid_duration = 0
 
@@ -855,26 +858,28 @@ class TrainManager:
        # costs = self.model.regulator.get_costs(regulator_pred.detach().cpu().numpy(), hyps=, refs=)
         # select correct part of log probs with nll
         #print("reg log prob", regulator_log_probs)
-        # TODO handle new cost
         # TODO include cost in basleine?
         nll = self.criterion(input=regulator_log_probs.view(regulator_pred.size(0), -1), target=regulator_pred)
-        # TODO fix cost: TER or the like
         #print("costs", costs)  # batch_size
         #print(self.budget)
-        budget_used = 1-(self.budget/max(self.initial_budget, 1))
+        #budget_used = 1-(self.budget/max(self.initial_budget, 1))
         #print("budget used", budget_used)
         # cost is scaled by budget percentage that is already used
         # the smaller the remaining budget, the more grows the cost
-        if self.budgeted_cost:
-            budgeted_costs = costs*(1+budget_used)
-            #print("cost with budget", budgeted_costs)
-        else:
-            budgeted_costs = costs
+        #if self.budgeted_cost:
+        #    budgeted_costs = costs*(1+budget_used)
+        #    #print("cost with budget", budgeted_costs)
+        #else:
+        #    budgeted_costs = costs
         #print("nll", nll)
         #print("logprob", regulator_log_probs)
         # introduce parameter for interpolation
-        trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
-        #print("trade_off", trade_off)
+        #trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
+        # TODO different combination?
+        # TODO check signs are correct
+        self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
+        trade_off = self.cost_weight*costs - reward
+        self.logger.info("trade_off: {}".format(trade_off))
 
         reg_loss = torch.mul(nll, regulator_log_probs.new(trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
         #print("loss", reg_loss) # batch_size
@@ -972,7 +977,7 @@ class TrainManager:
         if self.loss_weights["regulator"] > 0:
             # add statistics
             report_str += "\t Avg_Reward: {}".format(np.mean(self.rewards))
-            report_str += "\t Budget: {}".format(self.budget)
+            report_str += "\t Total_Cost: {}".format(self.total_cost)
             current_reg_out = self.regulator_outputs[-self.batch_size:]
             total = self.batch_size
             report_str += "\t %no_sup: {:.2f}".format(current_reg_out.count(0)/total*100)

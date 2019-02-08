@@ -52,7 +52,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             # TODO save computation: forward pass is computed twice
             # run as during training with teacher forcing
             if criterion is not None and batch.trg is not None:
-                batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs = \
+                batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs, batch_costs = \
                     model.get_loss_for_batch(batch, criterion=criterion,
                                              max_output_length=max_output_length,
                                              search="beam")
