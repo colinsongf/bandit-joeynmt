@@ -431,7 +431,7 @@ class Model(nn.Module):
                                                -sample_nll[:3].sum(1),
                                                matches[:3]):
                 logger.info(
-                    "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
+                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                         logprob))
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
@@ -494,7 +494,7 @@ class Model(nn.Module):
                                                 -sample_nll[:3].sum(1),
                                                 rewards):
                     logger.info(
-                        "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
+                        "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                             logprob))
                     logger.info("\tReference: {}".format(ref))
                     logger.info(
