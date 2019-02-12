@@ -368,7 +368,6 @@ class Model(nn.Module):
                         continue
             chunk_loss = (sample_nll.view(selected_batch_size, -1) * src_mask.new(
                 markings).float()).sum(1)
-            selected_tokens = markings.sum()
 
         elif chunk_type == "match":
             # 1 if occurs in reference, 0 if it doesn't
@@ -429,7 +428,7 @@ class Model(nn.Module):
                 assert len(refs_np_decoded) == len(hyps_decoded)
                 # compute sBLEUs
                 sbleus = np.array(sbleu(hyps_decoded, refs_np_decoded))
-                rewards = 1 - sbleus
+                rewards = sbleus
 
             elif chunk_type == "ster":
                 # decode hypothesis and target
@@ -438,7 +437,7 @@ class Model(nn.Module):
                 trg_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
                 assert len(trg_np_decoded_list) == len(hyp_decoded_list)
                 sters = np.array(ster(hyp_decoded_list, trg_np_decoded_list))
-                rewards = sters
+                rewards = -sters
 
             if weak_baseline:
                 if len(self.rewards) > 0:
