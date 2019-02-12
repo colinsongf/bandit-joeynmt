@@ -366,7 +366,7 @@ class Model(nn.Module):
         if level == "bpe":
             # merge byte pairs
             hyps_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
-            refs_np_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
+            refs_np_decoded = [t.replace("@@ ", "") for t in refs_np_decoded]
             hyps_decoded_list = [t.split(" ") for t in hyps_decoded]
             refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
 
