@@ -13,7 +13,8 @@ from joeynmt.batch import Batch
 
 
 def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
-                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1):
+                     level, eval_metric, criterion, beam_size=0, beam_alpha=-1,
+                     case_sensitive=True):
     """
     Generate translations for the given data.
     If `criterion` is not None and references are given, also compute the loss.
@@ -107,18 +108,18 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
             current_valid_score = 0
             if eval_metric.lower() == 'bleu':
                 # this version does not use any tokenization
-                current_valid_score = bleu(valid_hypotheses, valid_references)
+                current_valid_score = bleu(valid_hypotheses, valid_references, case_sensitive=case_sensitive)
             elif eval_metric.lower() == 'chrf':
-                current_valid_score = chrf(valid_hypotheses, valid_references)
+                current_valid_score = chrf(valid_hypotheses, valid_references, case_sensitive=case_sensitive)
             elif eval_metric.lower() == 'token_accuracy':
                 current_valid_score = token_accuracy(valid_hypotheses,
-                                               valid_references, level=level)
+                                               valid_references, level=level, case_sensitive=case_sensitive)
             elif eval_metric.lower() == 'sequence_accuracy':
                 current_valid_score = sequence_accuracy(valid_hypotheses,
-                                               valid_references)
+                                               valid_references, case_sensitive=case_sensitive)
             elif eval_metric.lower() == "ter":
                 # input to TER are lists
-                current_valid_score = ter(decoded_valid, [t for t in data.trg])
+                current_valid_score = ter(decoded_valid, [t for t in data.trg], case_sensitive=case_sensitive)
         else:
             current_valid_score = -1
 
@@ -163,6 +164,7 @@ def test(cfg_file,
     level = cfg["data"]["level"]
     eval_metric = cfg["training"]["eval_metric"]
     max_output_length = cfg["training"].get("max_output_length", None)
+    lowercase = cfg["data"].get("lowercase", False)
 
     # load the data
     # TODO load only test data
@@ -199,7 +201,7 @@ def test(cfg_file,
             model, data=data_set, batch_size=valid_batch_size, level=level,
             max_output_length=max_output_length, eval_metric=eval_metric,
             use_cuda=use_cuda, criterion=None, beam_size=beam_size,
-            beam_alpha=beam_alpha)
+            beam_alpha=beam_alpha, case_sensitive=not lowercase)
 
         if "trg" in data_set.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \

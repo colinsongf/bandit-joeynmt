@@ -12,7 +12,7 @@ from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
 from joeynmt.search import beam_search, greedy, sample
 from joeynmt.vocabulary import Vocabulary
 from torch.distributions import Categorical
-from joeynmt.metrics import sbleu, ster
+from joeynmt.metrics import sbleu, ster, sgleu
 from joeynmt.helpers import arrays_to_sentences
 
 
@@ -271,7 +271,8 @@ class Model(nn.Module):
                        max_output_length, chunk_type, criterion, target, level,
                        weak_baseline=True, weak_temperature=1.0,
                        weak_search="sample",
-                       beam_size=10, beam_alpha=1.0, logger=None):
+                       beam_size=10, beam_alpha=1.0, logger=None,
+                       case_sensitive=True):
         """
         Compute weakly-supervised loss for selected inputs
 
@@ -378,6 +379,7 @@ class Model(nn.Module):
             # print("bs", bs_hyp_pad)
             # print("trg", trg_np)
             # padding area is zero
+            # TODO use case sensitivity
             markings = np.zeros_like(sample_hyp_pad, dtype=float)
             for i, row in enumerate(sample_hyp):
                 for j, val in enumerate(row):
@@ -403,6 +405,7 @@ class Model(nn.Module):
         elif chunk_type == "match":
             # 1 if occurs in reference, 0 if it doesn't
             # position-independent
+            # TODO include case sensitivity
             matches = np.zeros_like(sample_hyp_pad, dtype=float)
             for i, row in enumerate(sample_hyp):
                 for j, val in enumerate(row):
@@ -470,11 +473,18 @@ class Model(nn.Module):
             if chunk_type == "sbleu":
                 assert len(refs_np_decoded) == len(hyps_decoded)
                 # compute sBLEUs
-                sbleus = np.array(sbleu(hyps_decoded, refs_np_decoded))
+                sbleus = np.array(sbleu(hyps_decoded, refs_np_decoded, case_sensitive=case_sensitive))
                 rewards = sbleus
 
+            elif chunk_type == "sgleu":
+                assert len(refs_np_decoded) == len(hyps_decoded)
+                # compute sGLEUs
+                sgleus = np.array(sgleu(hyps_decoded, refs_np_decoded,
+                                        case_sensitive=case_sensitive))
+                rewards = sgleus
+
             elif chunk_type == "ster":
-                sters = np.array(ster(hyps_decoded_list, refs_np_decoded_list))
+                sters = np.array(ster(hyps_decoded_list, refs_np_decoded_list, case_sensitive=case_sensitive))
                 rewards = 1-sters
 
             if logger is not None:
@@ -596,7 +606,7 @@ class Model(nn.Module):
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
                            max_output_length=100, chunk_type="marking", level="word",
                            entropy=False, weak_search="sample", weak_baseline=True,
-                           weak_temperature=1.0, logger=None):
+                           weak_temperature=1.0, logger=None, case_sensitive=True):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -690,7 +700,7 @@ class Model(nn.Module):
                     chunk_type=chunk_type, level=level,
                     target=batch.trg, weak_temperature=weak_temperature,
                     weak_search=weak_search,
-                    weak_baseline=weak_baseline, logger=logger)
+                    weak_baseline=weak_baseline, logger=logger, case_sensitive=case_sensitive)
                 #print("weak sup selected", weak_sup_loss_selected)
                 batch_loss += weak_sup_loss_selected.sum()
                 batch_tokens += tokens

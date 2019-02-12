@@ -204,6 +204,7 @@ class TrainManager:
         self.validation_freq = train_config.get("validation_freq", 1000)
         self.print_valid_sents = train_config["print_valid_sents"]
         self.level = config["data"]["level"]
+        self.lowercase = config["data"].get("lowercase", False)
         self.clip_grad_fun = None
         if "clip_grad_val" in train_config.keys():
             clip_value = train_config["clip_grad_val"]
@@ -254,6 +255,9 @@ class TrainManager:
         self.logger.info("Using {} for weak feedback.".format(self.weak_search))
         self.weak_temperature = train_config.get("weak_temperature", 1.0)
         self.logger.info("Using temp={} for weak feedback.".format(self.weak_temperature))
+        self.weak_case_sensitive = train_config.get("weak_case_sensitive", True)
+        self.logger.info("Using case sensitive weak feedback? {}".format(self.weak_case_sensitive))
+
 
     def save_checkpoint(self):
         """
@@ -553,7 +557,8 @@ class TrainManager:
                                     use_cuda=self.use_cuda,
                                     max_output_length=self.max_output_length,
                                     # but without running train input again
-                                    criterion=None)
+                                    criterion=None,
+                                    case_sensitive=not self.lowercase)
                         #print("reward", valid_score_immediate)
                         reward = valid_score_immediate/100
 
@@ -648,7 +653,8 @@ class TrainManager:
                             level=self.level, model=self.model,
                             use_cuda=self.use_cuda,
                             max_output_length=self.max_output_length,
-                            criterion=self.criterion)
+                            criterion=self.criterion,
+                            case_sensitive=not self.lowercase)
 
                     total_valid_duration = self.process_validation(
                         epoch_no=epoch_no, valid_hypotheses=valid_hypotheses,
@@ -789,7 +795,8 @@ class TrainManager:
                         weak_search=self.weak_search,
                         weak_baseline=self.weak_baseline,
                         weak_temperature=self.weak_temperature,
-                        logger=self.logger)
+                        logger=self.logger,
+                        case_sensitive=self.weak_case_sensitive)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
