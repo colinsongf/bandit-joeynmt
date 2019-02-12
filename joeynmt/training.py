@@ -788,7 +788,8 @@ class TrainManager:
                         entropy=self.self_entropy,
                         weak_search=self.weak_search,
                         weak_baseline=self.weak_baseline,
-                        weak_temperature=self.weak_temperature)
+                        weak_temperature=self.weak_temperature,
+                        logger=self.logger)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
@@ -879,6 +880,7 @@ class TrainManager:
         self.logger.debug("COST: {}, REWARD: {}".format(costs, reward))
         self.logger.debug("PREDS: {}".format(regulator_pred))
         trade_off = reward - self.cost_weight*costs
+        #trade_off = reward / (costs+1)
         self.logger.debug("trade_off: {}".format(trade_off))
         if self.baseline and len(self.rewards) > 0:
             self.logger.debug("MEAN BASELINE: {}".format(np.mean(self.rewards)))
@@ -886,7 +888,7 @@ class TrainManager:
             self.logger.debug("trade_off-BL: {}".format(trade_off))
         self.rewards.append(trade_off.cpu().numpy().mean())
 
-        reg_loss = torch.mul(nll, regulator_log_probs.new(-trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
+        reg_loss = -torch.mul(nll, regulator_log_probs.new(trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
         #print("loss", reg_loss) # batch_size
 
         entropy = 0

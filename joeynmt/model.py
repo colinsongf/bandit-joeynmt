@@ -180,7 +180,7 @@ class Model(nn.Module):
     # then sum loss
     # -> still mini-batching, but smaller
 
-    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, criterion, beam_size=10, beam_alpha=1.0, entropy=False):
+    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, criterion, target, level, beam_size=10, beam_alpha=1.0, entropy=False, logger=None):
         """
         Compute the loss for self-supervised training for the given selection
         of indices of the batch
@@ -240,7 +240,7 @@ class Model(nn.Module):
         bs_target = src_mask.new(bs_hyp_pad).long()
 
         bs_nll = criterion(
-            input=bs_log_probs.contiguous().view(-1,bs_log_probs.size(-1)),
+            input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
             target=bs_target.view(-1))
         self_sup_loss = bs_nll.view(selected_batch_size, -1).sum(
             -1)  # batch
@@ -253,6 +253,17 @@ class Model(nn.Module):
             # print("weighted", self_sup_loss)
         # TODO logprob selection can actually be done for all, just return chosen hyp and reward
         # then logprobs are selected and multiplied by reward
+
+        if logger is not None:
+            logger.info("Examples from self-supervision:")
+            join_char = " " if level in ["word", "bpe"] else ""
+            decoded_bs_hyp = [join_char.join(t) for t in arrays_to_sentences(bs_hyp[:3], vocabulary=self.trg_vocab)]
+            decoded_ref = [join_char.join(t) for t in arrays_to_sentences(torch.index_select(target, index=selection, dim=0)[:3], vocabulary=self.trg_vocab)]
+            for hyp, ref, logprob in zip(decoded_bs_hyp, decoded_ref, -self_sup_loss[:3]):
+                logger.info("\tSelf-supervision: {} ({:.3f})".format(hyp, logprob))
+                logger.info("\tReference: {}".format(ref))
+
+
         assert self_sup_loss.size(0) == selected_batch_size
         return self_sup_loss.sum(), selected_tokens, selected_batch_size
 
@@ -260,7 +271,7 @@ class Model(nn.Module):
                        max_output_length, chunk_type, criterion, target, level,
                        weak_baseline=True, weak_temperature=1.0,
                        weak_search="sample",
-                       beam_size=10, beam_alpha=1.0):
+                       beam_size=10, beam_alpha=1.0, logger=None):
         """
         Compute weakly-supervised loss for selected inputs
 
@@ -336,20 +347,20 @@ class Model(nn.Module):
 
         sample_nll = criterion(
             input=sample_log_probs.contiguous().view(-1, sample_log_probs.size(-1)),
-            target=sample_target.view(-1))
+            target=sample_target.view(-1)).view(selected_batch_size, -1)
 
         # decode reference
         join_char = " " if level in ["word", "bpe"] else ""
-        refs_np_decoded = [join_char.join(t) for t in
-                          arrays_to_sentences(arrays=trg_np,
+        refs_np_decoded_list = arrays_to_sentences(arrays=trg_np,
                                               vocabulary=self.trg_vocab,
-                                              cut_at_eos=True)]
+                                              cut_at_eos=True)
+        refs_np_decoded = [join_char.join(t) for t in refs_np_decoded_list]
 
         # decode hypothesis
-        hyps_decoded = [join_char.join(t) for t in
-                       arrays_to_sentences(arrays=sample_hyp,
+        hyps_decoded_list = arrays_to_sentences(arrays=sample_hyp,
                                               vocabulary=self.trg_vocab,
-                                              cut_at_eos=True)]
+                                              cut_at_eos=True)
+        hyps_decoded = [join_char.join(t) for t in hyps_decoded_list]
 
         if chunk_type == "marking":
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
@@ -366,8 +377,19 @@ class Model(nn.Module):
                             markings[i, j] = 1.
                     except IndexError:  # BS is longer than trg
                         continue
-            chunk_loss = (sample_nll.view(selected_batch_size, -1) * src_mask.new(
-                markings).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(markings).float()).sum(1)
+
+            logger.info("Examples from weak supervision:")
+            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+                                            refs_np_decoded_list[:3],
+                                            -sample_nll[:3].sum(1),
+                                            markings[:3]):
+                logger.info(
+                    "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
+                                                        logprob))
+                logger.info("\tReference: {}".format(ref))
+                logger.info(
+                    "\tMarkings {}".format([(h, m) for h, m in zip(hyp, mark)]))
 
         elif chunk_type == "match":
             # 1 if occurs in reference, 0 if it doesn't
@@ -389,9 +411,19 @@ class Model(nn.Module):
 #            print("hyp", sample_hyp_pad)
 #            print("ref", trg_np)
 #            print("matches", matches)
-            chunk_loss = (
-            sample_nll.view(selected_batch_size, -1) * src_mask.new(
-                matches).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(matches).float()).sum(1)
+
+            logger.info("Examples from weak supervision:")
+            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+                                               refs_np_decoded_list[:3],
+                                               -sample_nll[:3].sum(1),
+                                               matches[:3]):
+                logger.info(
+                    "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
+                                                        logprob))
+                logger.info("\tReference: {}".format(ref))
+                logger.info(
+                    "\tMatching {}".format([(h, m) for h, m in zip(hyp, mark)]))
 
         elif chunk_type == "lcs":
             #def token_lcs_reward(gold, pred):
@@ -422,6 +454,8 @@ class Model(nn.Module):
             # TODO
             pass
 
+
+
         else:
             # use same reward for all the tokens
             if chunk_type == "sbleu":
@@ -437,8 +471,22 @@ class Model(nn.Module):
                 trg_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
                 assert len(trg_np_decoded_list) == len(hyp_decoded_list)
                 sters = np.array(ster(hyp_decoded_list, trg_np_decoded_list))
-                rewards = -sters
+                rewards = 1-sters
 
+            if logger is not None:
+                logger.info("Examples from weak supervision:")
+                for hyp, ref, logprob, r in zip(hyps_decoded[:3],
+                                                refs_np_decoded[:3],
+                                                -sample_nll[:3].sum(1),
+                                                rewards):
+                    logger.info(
+                        "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
+                                                            logprob))
+                    logger.info("\tReference: {}".format(ref))
+                    logger.info(
+                        "\tReward: {:.3f} {} (BL: {:.3f})".format(r, chunk_type,
+                                                                  np.mean(
+                                                                      self.rewards)))
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
@@ -451,7 +499,7 @@ class Model(nn.Module):
                 new_rewards = rewards
 
             # make update with baselined rewards
-            chunk_loss = sample_nll.sum(-1) * src_mask.new(new_rewards).float()
+            chunk_loss = sample_nll.sum(1) * src_mask.new(new_rewards).float()
 
         # compute cost
         # word-based -> need to decode
@@ -481,7 +529,7 @@ class Model(nn.Module):
     def _full_sup_loss(self, selection, decoder_out, criterion, target,
                        batch_src_mask, max_output_length, encoder_hidden,
                        encoder_out, level,
-                       beam_size=10, beam_alpha=1.0):
+                       beam_size=10, beam_alpha=1.0, logger=None):
         """
         Compute the loss for fully-supervised training for the given selection
         of indices of the batch
@@ -544,7 +592,7 @@ class Model(nn.Module):
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
                            max_output_length=100, chunk_type="marking", level="word",
                            entropy=False, weak_search="sample", weak_baseline=True,
-                           weak_temperature=1.0):
+                           weak_temperature=1.0, logger=None):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -609,7 +657,8 @@ class Model(nn.Module):
                 self_sup_loss_selected, tokens, seqs = self._self_sup_loss(
                     selection=ones_idx, encoder_out=encoder_out, entropy=entropy,
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
-                    max_output_length=max_output_length, criterion=criterion)
+                    max_output_length=max_output_length, criterion=criterion,
+                    logger=logger, target=batch.trg, level=level)
                 #print("self sup selected", self_sup_loss_selected)
                 batch_loss += self_sup_loss_selected.sum()
                 batch_tokens += tokens
@@ -627,7 +676,7 @@ class Model(nn.Module):
                     chunk_type=chunk_type, level=level,
                     target=batch.trg, weak_temperature=weak_temperature,
                     weak_search=weak_search,
-                    weak_baseline=weak_baseline)
+                    weak_baseline=weak_baseline, logger=logger)
                 #print("weak sup selected", weak_sup_loss_selected)
                 batch_loss += weak_sup_loss_selected.sum()
                 batch_tokens += tokens
@@ -645,7 +694,7 @@ class Model(nn.Module):
                     criterion=criterion, target=batch.trg,
                     encoder_hidden=encoder_hidden, level=level,
                     encoder_out=encoder_out, max_output_length=max_output_length,
-                    batch_src_mask=batch.src_mask)
+                    batch_src_mask=batch.src_mask, logger=logger)
                # print("full sup selected", full_sup_loss_selected)
                 batch_loss += full_sup_loss_selected
                 batch_tokens += tokens
