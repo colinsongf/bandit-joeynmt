@@ -362,6 +362,15 @@ class Model(nn.Module):
                                               cut_at_eos=True)
         hyps_decoded = [join_char.join(t) for t in hyps_decoded_list]
 
+        # post-process for BPE
+        if level == "bpe":
+            # merge byte pairs
+            hyps_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
+            refs_np_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
+            hyps_decoded_list = [t.split(" ") for t in hyps_decoded]
+            refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
+
+
         if chunk_type == "marking":
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
             # 1 if correct, 0 if incorrect
@@ -465,12 +474,7 @@ class Model(nn.Module):
                 rewards = sbleus
 
             elif chunk_type == "ster":
-                # decode hypothesis and target
-                # first merge BPEs, then split at white space
-                hyp_decoded_list = [t.split(" ") for t in hyps_decoded]
-                trg_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
-                assert len(trg_np_decoded_list) == len(hyp_decoded_list)
-                sters = np.array(ster(hyp_decoded_list, trg_np_decoded_list))
+                sters = np.array(ster(hyps_decoded_list, refs_np_decoded_list))
                 rewards = 1-sters
 
             if logger is not None:
@@ -712,6 +716,17 @@ class Model(nn.Module):
                 # get cost: # edits needed in hyp
                 # write at the right position of cost vector
                 batch_costs[threes_idx] = batch_costs.new(costs)
+
+                selected_srcs = torch.index_select(batch.src, dim=0,
+                                                   index=threes_idx)
+                join_char = " " if level in ["word", "bpe"] else ""
+                decoded_srcs = [join_char.join(t) for t in
+                                arrays_to_sentences(selected_srcs,
+                                                    vocabulary=self.src_vocab)]
+
+                logger.info("Examples for full supervision:")
+                for src in decoded_srcs[:3]:
+                    logger.info("\tFull supervision for: {}".format(src))
 
             if type(batch_loss) == int:  # no update for batch
                 batch_loss = None
