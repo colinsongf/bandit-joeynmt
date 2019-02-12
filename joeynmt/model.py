@@ -649,6 +649,16 @@ class Model(nn.Module):
                 # skip those: no loss
                 zeros = torch.eq(reg_pred, 0)
                 zeros_idx = zeros.nonzero().squeeze(1)
+                selected_srcs = torch.index_select(batch.src, dim=0,
+                                                   index=zeros_idx)
+                join_char = " " if level in ["word", "bpe"] else ""
+                decoded_srcs = [join_char.join(t) for t in
+                               arrays_to_sentences(selected_srcs,
+                                                   vocabulary=self.src_vocab)]
+
+                logger.info("Examples for no supervision:")
+                for src in decoded_srcs[:3]:
+                    logger.info("\tSkipping {}".format(src))
                 # no cost
             if 1 in reg_pred:
                 ones = torch.eq(reg_pred, 1)
