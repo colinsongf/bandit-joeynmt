@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from collections import Set
 from joeynmt.initialization import initialize_model
 from joeynmt.embeddings import Embeddings
 from joeynmt.encoders import Encoder, RecurrentEncoder
@@ -439,34 +440,99 @@ class Model(nn.Module):
 
         elif chunk_type == "lcs":
             #def token_lcs_reward(gold, pred):
-            # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
-            # idea from http://www.aclweb.org/anthology/P18-2052
-             # TODO adapt to all longest substrings
-             #def longest_common_substring_rewards(pred, gold):
-             #   m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
-             #   longest, x_longest = 0, 0
-             #   rewards = np.zeros(len(pred))
-             #   for x in range(1, 1 + len(pred)):
-             #       for y in range(1, 1 + len(gold)):
-             #           if pred[x - 1] == gold[y - 1]:
-             #               m[x][y] = m[x - 1][y - 1] + 1
-             #               if m[x][y] > longest:
-             #                   longest = m[x][y]
-             #                   x_longest = x
-             #           else:
-             #               m[x][y] = 0
-             #   rewards[x_longest - longest: x_longest] = 1
-             #   #return pred[x_longest - longest: x_longest]
-             #   return rewards
-            #all_rewards = np.zeros_like(pred, dtype=float)
-            #for j, (g, p) in enumerate(zip(gold, pred)):  # iterate over batch
-            #    r = longest_common_substring_rewards(p, g)
-            #    all_rewards[j] += r
+                # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
+                # idea from http://www.aclweb.org/anthology/P18-2052
+                # TODO adapt to all longest substrings
+            def longest_common_substring_rewards(pred, gold):
+                m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
+                longest, x_longest = 0, 0
+                rewards = np.zeros(len(pred))
+                for x in range(1, 1 + len(pred)):
+                    for y in range(1, 1 + len(gold)):
+                        if pred[x - 1] == gold[y - 1]:
+                            m[x][y] = m[x - 1][y - 1] + 1
+                            if m[x][y] > longest:
+                                longest = m[x][y]
+                            x_longest = x
+                        else:
+                            m[x][y] = 0
+                rewards[x_longest - longest: x_longest] = 1
+                #return pred[x_longest - longest: x_longest]
+                return rewards
+
+            all_rewards = np.zeros_like(sample_hyp_pad, dtype=float)
+            for j, (g, p) in enumerate(zip(trg_np, sample_hyp_pad)):  # iterate over batch
+                r = longest_common_substring_rewards(p, g)
+                all_rewards[j] += r
             #return all_rewards
             # TODO
-            pass
+            #pass
+            chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
 
 
+            logger.info("Examples from weak supervision:")
+            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+                                               refs_np_decoded_list[:3],
+                                               -sample_nll[:3].sum(1),
+                                               all_rewards[:3]):
+                logger.info(
+                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
+                                                        logprob))
+                logger.info("\tReference: {}".format(ref))
+                logger.info(
+                    "\tLCS {}".format([(h, m) for h, m in zip(hyp, mark)]))
+
+        elif chunk_type == "lcs-all":
+            #def token_lcs_reward(gold, pred):
+                # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
+                # idea from http://www.aclweb.org/anthology/P18-2052
+                # TODO adapt to all longest substrings
+            def all_longest_common_substring_rewards(pred, gold):
+                m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
+                # collect all length of all longest spans here
+                len_start = {}
+                longest, x_longest = 0, 0
+                rewards = np.zeros(len(pred))
+                for x in range(1, 1 + len(pred)):
+                    for y in range(1, 1 + len(gold)):
+                        if pred[x - 1] == gold[y - 1]:
+                            m[x][y] = m[x - 1][y - 1] + 1
+                            if m[x][y] >= longest:
+                                old = len_start.get(m[x][y], set())
+                                old.add(x)
+                                len_start[m[x][y]] = old
+                            if m[x][y] > longest:
+                                longest = m[x][y]
+                            x_longest = x
+
+                        else:
+                            m[x][y] = 0
+                #rewards[x_longest - longest: x_longest] = 1
+                for pos in len_start[longest]:
+                    rewards[pos - longest: pos] = 1
+                #return pred[x_longest - longest: x_longest]
+                return rewards
+
+            all_rewards = np.zeros_like(sample_hyp_pad, dtype=float)
+            for j, (g, p) in enumerate(zip(trg_np, sample_hyp_pad)):  # iterate over batch
+                r = all_longest_common_substring_rewards(p, g)
+                all_rewards[j] += r
+            # TODO remove rewards for duplications: only reinforce as often as in reference
+            #pass
+            chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
+
+
+            logger.info("Examples from weak supervision:")
+            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+                                               refs_np_decoded_list[:3],
+                                               -sample_nll[:3].sum(1),
+                                               all_rewards[:3]):
+                logger.info(
+                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
+                                                        logprob))
+                logger.info("\tReference: {}".format(ref))
+                logger.info(
+                    "\tLCS-ALL{}".format([(h, m) for h, m in zip(hyp, mark)]))
 
         else:
             # use same reward for all the tokens
