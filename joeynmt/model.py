@@ -268,7 +268,7 @@ class Model(nn.Module):
         assert self_sup_loss.size(0) == selected_batch_size
         return self_sup_loss.sum(), selected_tokens, selected_batch_size
 
-    def _weak_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask,
+    def _weak_sup_loss(self, selection, src, encoder_out, encoder_hidden, src_mask,
                        max_output_length, chunk_type, criterion, target, level,
                        weak_baseline=True, weak_temperature=1.0,
                        weak_search="sample",
@@ -284,6 +284,7 @@ class Model(nn.Module):
         :param selection:
         :return:
         """
+        selected_srcs = torch.index_select(src, dim=0, index=selection)
         selected_encoder_out = torch.index_select(encoder_out, index=selection,
                                                   dim=0)
         selected_encoder_hidden = torch.index_select(encoder_hidden,
@@ -364,6 +365,12 @@ class Model(nn.Module):
                                               cut_at_eos=True)
         hyps_decoded = [join_char.join(t) for t in hyps_decoded_list]
 
+        # decode source
+
+        decoded_srcs = [join_char.join(t) for t in
+                        arrays_to_sentences(selected_srcs,
+                                            vocabulary=self.src_vocab)]
+
         if chunk_type == "marking":
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
             # 1 if correct, 0 if incorrect
@@ -383,10 +390,11 @@ class Model(nn.Module):
             chunk_loss = (sample_nll * src_mask.new(markings).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
-                                            refs_np_decoded_list[:3],
+            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
+                                            refs_np_decoded_list[:3], decoded_srcs[:3],
                                             -sample_nll[:3].sum(1),
                                             markings[:3]):
+                logger.info("\tSource: {}".format(src))
                 logger.info(
                     "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
                                                         logprob))
@@ -418,10 +426,13 @@ class Model(nn.Module):
             chunk_loss = (sample_nll * src_mask.new(matches).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
-                                               -sample_nll[:3].sum(1),
+                                                    decoded_srcs[:3],
+                                                    -sample_nll[:3].sum(1),
                                                matches[:3]):
+                logger.info("\tSource: {}".format(src))
+
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                         logprob))
@@ -463,10 +474,12 @@ class Model(nn.Module):
 
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
+                                               decoded_srcs[:3],
                                                -sample_nll[:3].sum(1),
                                                all_rewards[:3]):
+                logger.info("\tSrc: {}".format(src))
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                         logprob))
@@ -516,10 +529,12 @@ class Model(nn.Module):
 
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
+                                                decoded_srcs[:3],
                                                -sample_nll[:3].sum(1),
                                                all_rewards[:3]):
+                logger.info("\tSrc: {}".format(src))
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                         logprob))
@@ -557,10 +572,12 @@ class Model(nn.Module):
 
             if logger is not None:
                 logger.info("Examples from weak supervision:")
-                for hyp, ref, logprob, r in zip(hyps_decoded[:3],
+                for hyp, ref, src, logprob, r in zip(hyps_decoded[:3],
                                                 refs_np_decoded[:3],
+                                                decoded_srcs[:3],
                                                 -sample_nll[:3].sum(1),
                                                 rewards):
+                    logger.info("\tSrc: {}".format(src))
                     logger.info(
                         "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                             logprob))
@@ -762,7 +779,7 @@ class Model(nn.Module):
                 twos = torch.eq(reg_pred, 2)
                 twos_idx = twos.nonzero().squeeze(1)
                 weak_sup_loss_selected, tokens, seqs, costs = self._weak_sup_loss(
-                    selection=twos_idx, encoder_out=encoder_out,
+                    selection=twos_idx, src=batch.src, encoder_out=encoder_out,
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
                     max_output_length=max_output_length, criterion=criterion,
                     chunk_type=chunk_type, level=level,
