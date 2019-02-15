@@ -461,9 +461,10 @@ class Model(nn.Module):
                 return rewards
 
             all_rewards = np.zeros_like(sample_hyp_pad, dtype=float)
-            for j, (g, p) in enumerate(zip(trg_np, sample_hyp_pad)):  # iterate over batch
+            for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
                 r = longest_common_substring_rewards(p, g)
-                all_rewards[j] += r
+                for i, r_i in enumerate(r):
+                    all_rewards[j, i] = r_i  # r does not cover padding area
             #return all_rewards
             # TODO
             #pass
@@ -514,9 +515,10 @@ class Model(nn.Module):
                 return rewards
 
             all_rewards = np.zeros_like(sample_hyp_pad, dtype=float)
-            for j, (g, p) in enumerate(zip(trg_np, sample_hyp_pad)):  # iterate over batch
+            for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
                 r = all_longest_common_substring_rewards(p, g)
-                all_rewards[j] += r
+                for i, r_i in enumerate(r):
+                    all_rewards[j, i] = r_i
             # TODO remove rewards for duplications: only reinforce as often as in reference
             #pass
             chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
