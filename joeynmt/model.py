@@ -364,15 +364,6 @@ class Model(nn.Module):
                                               cut_at_eos=True)
         hyps_decoded = [join_char.join(t) for t in hyps_decoded_list]
 
-        # post-process for BPE
-        if level == "bpe":
-            # merge byte pairs
-            hyps_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
-            refs_np_decoded = [t.replace("@@ ", "") for t in refs_np_decoded]
-            hyps_decoded_list = [t.split(" ") for t in hyps_decoded]
-            refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
-
-
         if chunk_type == "marking":
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
             # 1 if correct, 0 if incorrect
@@ -537,6 +528,15 @@ class Model(nn.Module):
                     "\tLCS-ALL{}".format([(h, m) for h, m in zip(hyp, mark)]))
 
         else:
+            # post-process for BPE
+            if level == "bpe":
+                # merge byte pairs
+                hyps_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
+                refs_np_decoded = [t.replace("@@ ", "") for t in
+                                   refs_np_decoded]
+                hyps_decoded_list = [t.split(" ") for t in hyps_decoded]
+                refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
+
             # use same reward for all the tokens
             if chunk_type == "sbleu":
                 assert len(refs_np_decoded) == len(hyps_decoded)
