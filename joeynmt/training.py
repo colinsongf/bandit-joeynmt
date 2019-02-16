@@ -377,18 +377,18 @@ class TrainManager:
         else:
             self.model.load_state_dict(model_checkpoint["model_state"])
 
-
         # restore optimizer parameters
         if type(self.optimizer) == dict:
             # loaded model did have a regulator
             if "mt_optimizer_state" in model_checkpoint:
                 self.optimizer["mt"].load_state_dict(
                     model_checkpoint["mt_optimizer_state"])
-                self.logger.info(self.optimizer["mt"])
+                self.logger.info("MT optimizer: {}".format(self.optimizer["mt"]))
             # loaded model didn't have a regulator
             elif "optimizer_state" in model_checkpoint:
                 self.optimizer["mt"].load_state_dict(
                     model_checkpoint["optimizer_state"])
+                self.logger.info("MT optimizer: {}".format(self.optimizer["mt"]))
             # else: newly created
             else:
                 self.logger.info("Newly creating optimizer for MT.")
@@ -412,6 +412,15 @@ class TrainManager:
                             'Optimizer for {}: Overwriting learning rate'
                             ' of group {} from {:.4e} to {:.4e}.'.format(
                                 o_name, i, old_lr, new_lr))
+                    # needed for SGD
+                    weight_decay = param_group.get('weight_decay', 0)
+                    momentum = param_group.get('momentum', 0)
+                    dampening = param_group.get('dampening', 0)
+                    nesterov = param_group.get('nesterov', 0)
+                    param_group['weight_decay'] = weight_decay
+                    param_group['momentum'] = momentum
+                    param_group['dampening'] = dampening
+                    param_group['nesterov'] = nesterov
         else:
             self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
 
