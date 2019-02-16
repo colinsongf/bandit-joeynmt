@@ -387,6 +387,11 @@ class Model(nn.Module):
                             markings[i, j] = 1.
                     except IndexError:  # BS is longer than trg
                         continue
+
+            if weak_baseline:
+                # baseline over time
+                # TODO over batch?
+                markings -= np.mean(markings, axis=1, keepdims=True)
             chunk_loss = (sample_nll * src_mask.new(markings).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
@@ -423,6 +428,10 @@ class Model(nn.Module):
 #            print("hyp", sample_hyp_pad)
 #            print("ref", trg_np)
 #            print("matches", matches)
+            if weak_baseline:
+                # baseline over time
+                # TODO over batch?
+                matches -= np.mean(matches, axis=1, keepdims=True)
             chunk_loss = (sample_nll * src_mask.new(matches).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
@@ -467,9 +476,11 @@ class Model(nn.Module):
                 r = longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
                     all_rewards[j, i] = r_i  # r does not cover padding area
-            #return all_rewards
-            # TODO
-            #pass
+            if weak_baseline:
+                # baseline over time
+                # TODO over batch?
+                all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
+
             chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
 
 
@@ -524,7 +535,12 @@ class Model(nn.Module):
                 for i, r_i in enumerate(r):
                     all_rewards[j, i] = r_i
             # TODO remove rewards for duplications: only reinforce as often as in reference
-            #pass
+
+            if weak_baseline:
+                # baseline over time
+                # TODO over batch?
+                all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
+
             chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
 
 
