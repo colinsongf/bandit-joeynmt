@@ -198,6 +198,7 @@ def load_data(cfg):
     data_cfg = cfg["data"]
     src_lang = data_cfg["src"]
     trg_lang = data_cfg["trg"]
+    mt_suffix = data_cfg.get("mt", None)
     train_path = data_cfg["train"]
     dev_path = data_cfg["dev"]
     test_path = data_cfg.get("test", None)
@@ -221,14 +222,35 @@ def load_data(cfg):
                            unk_token=UNK_TOKEN,
                            batch_first=True, lower=lowercase,
                            include_lengths=True)
-    train_data = TranslationDataset(path=train_path,
-                                    exts=("." + src_lang, "." + trg_lang),
-                                    fields=(src_field, trg_field),
-                                    filter_pred=
-                                    lambda x: len(vars(x)['src'])
-                                              <= max_sent_length and
-                                              len(vars(x)['trg'])
-                                              <= max_sent_length)
+
+    if mt_suffix is not None:
+        print("MULTI-SRC FOR APE")
+        mt_field = data.Field(init_token=BOS_TOKEN, eos_token=EOS_TOKEN,
+                           pad_token=PAD_TOKEN, tokenize=tok_fun,
+                           unk_token=UNK_TOKEN,
+                           batch_first=True, lower=lowercase,
+                           include_lengths=True)
+
+        train_data = PEDataset(path=train_path,
+                                exts=("." + src_lang, "." + trg_lang, "." + mt_suffix),
+                                fields=(src_field, trg_field, mt_field),
+                                filter_pred=
+                                lambda x: len(vars(x)['src'])
+                                          <= max_sent_length and
+                                          len(vars(x)['trg'])
+                                          <= max_sent_length and
+                                          len(vars(x)['mt']))
+
+    else:
+
+        train_data = TranslationDataset(path=train_path,
+                                        exts=("." + src_lang, "." + trg_lang),
+                                        fields=(src_field, trg_field),
+                                        filter_pred=
+                                        lambda x: len(vars(x)['src'])
+                                                  <= max_sent_length and
+                                                  len(vars(x)['trg'])
+                                                  <= max_sent_length)
     max_size = data_cfg.get("voc_limit", sys.maxsize)
     min_freq = data_cfg.get("voc_min_freq", 1)
     src_vocab_file = data_cfg.get("src_vocab", None)
@@ -238,25 +260,79 @@ def load_data(cfg):
                             data=train_data, vocab_file=src_vocab_file)
     trg_vocab = build_vocab(field="trg", min_freq=min_freq, max_size=max_size,
                             data=train_data, vocab_file=trg_vocab_file)
-    dev_data = TranslationDataset(path=dev_path,
-                                  exts=("." + src_lang, "." + trg_lang),
-                                  fields=(src_field, trg_field))
+
+    if mt_suffix is not None:
+        dev_data = PEDataset(path=dev_path,
+                              exts=("." + src_lang, "." + trg_lang, "." + mt_suffix),
+                              fields=(src_field, trg_field, mt_field))
+    else:
+        dev_data = TranslationDataset(path=dev_path,
+                                      exts=("." + src_lang, "." + trg_lang),
+                                      fields=(src_field, trg_field))
     test_data = None
     if test_path is not None:
         # check if target exists
-        if os.path.isfile(test_path+"."+trg_lang):
+        if os.path.isfile(test_path+"."+trg_lang) and mt_suffix is None:
             test_data = TranslationDataset(
                 path=test_path, exts=("." + src_lang, "." + trg_lang),
                 fields=(src_field, trg_field))
+        elif os.path.isfile(test_path+"."+trg_lang) and mt_suffix is not None:
+            test_data = PEDataset(
+                path=test_path, exts=("." + src_lang, "." + trg_lang, "." + mt_suffix),
+                fields=(src_field, trg_field, mt_field))
         else:
             # no target is given -> create dataset from src only
+            if mt_suffix is None:
+                test_data = MonoDataset(path=test_path, ext="." + src_lang,
+                                        field=(src_field))
+            else:
+                test_data = TranslationDataset(path=test_path,
+                                               exts=("." + src_lang, "." + mt_suffix),
+                                        fields=(src_field, mt_field))
+                # hack: rename trg field to mt field to reuse API (also for examples)
+                new_fields = {}
+                for f in test_data.fields.keys():
+                    new_fields[f.replace("trg", "mt")] = test_data.fields[f]
+                test_data.fields = new_fields
 
-            test_data = MonoDataset(path=test_path, ext="." + src_lang,
-                                    field=(src_field))
+                for e in test_data.examples:
+                    e.mt = e.trg
+                    del e.trg
     src_field.vocab = src_vocab
     trg_field.vocab = trg_vocab
+
+    if mt_suffix is not None:
+        mt_field.vocab = trg_vocab
     return train_data, dev_data, test_data, src_vocab, trg_vocab
 
+
+class PEDataset(TranslationDataset):
+    """Defines a dataset for machine translation without targets."""
+
+    def __init__(self, path, exts, fields, **kwargs):
+        """Create a PEDataset given path and field.
+
+        Arguments:
+            path: Prefix of path to the data file
+            exts: Containing the extension to path for this language.
+            fields: Containing the fields that will be used for data
+            Remaining keyword arguments: Passed to the constructor of
+                data.Dataset.
+        """
+        if not isinstance(fields[0], (tuple, list)):
+            fields = [('src', fields[0]), ('trg', fields[1]), ('mt', fields[2])]
+
+        src_path, trg_path, mt_path = tuple(os.path.expanduser(path + x) for x in exts)
+
+        examples = []
+        with open(src_path) as src_file, open(trg_path) as trg_file, open(mt_path) as mt_file:
+            for src_line, trg_line, mt_line in zip(src_file, trg_file, mt_file):
+                src_line, trg_line, mt_file = src_line.strip(), trg_line.strip(), mt_line.strip()
+                if src_line != '' and trg_line != '' and mt_line != '':
+                    examples.append(data.Example.fromlist(
+                        [src_line, trg_line, mt_line], fields))
+
+        super(TranslationDataset, self).__init__(examples, fields, **kwargs)
 
 class MonoDataset(TranslationDataset):
     """Defines a dataset for machine translation without targets."""

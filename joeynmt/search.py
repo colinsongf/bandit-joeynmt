@@ -53,7 +53,7 @@ def sample(src_mask, embed, bos_index, max_output_length, decoder,
 
 
 def greedy(src_mask, embed, bos_index, max_output_length, decoder,
-           encoder_output, encoder_hidden):
+           encoder_output, encoder_hidden, trg_encoder_output=None, trg_encoder_hidden=None, trg_mask=None):
     """
     Greedy decoding: in each step, choose the word that gets highest score.
 
@@ -78,6 +78,9 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
         out, hidden, att_probs, prev_att_vector = decoder(
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
+            trg_encoder_hidden=trg_encoder_hidden,
+            trg_encoder_output=trg_encoder_output,
+            trg_mask=trg_mask,
             src_mask=src_mask,
             trg_embed=embed(prev_y),
             hidden=hidden,
@@ -98,7 +101,8 @@ def greedy(src_mask, embed, bos_index, max_output_length, decoder,
 
 def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
                 encoder_hidden, src_mask, max_output_length, alpha, embed,
-                n_best=1):
+                n_best=1, trg_encoder_hidden=None, trg_encoder_output=None,
+                trg_mask=None):
     """
     Beam search with size k. Follows OpenNMT-py implementation.
     In each decoding step, find the k most likely partial hypotheses.
@@ -127,6 +131,10 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
 
     encoder_output = tile(encoder_output.contiguous(), size,
                           dim=0)  # batch*k x src_len x enc_hidden_size
+    if trg_encoder_output is not None:
+        trg_encoder_output = tile(trg_encoder_output.contiguous(), size,
+                              dim=0)
+        trg_mask = tile(trg_mask, size, dim=0)
 
     src_mask = tile(src_mask, size, dim=0)  # batch*k x 1 x src_len
 
@@ -166,6 +174,9 @@ def beam_search(decoder, size, bos_index, eos_index, pad_index, encoder_output,
         out, hidden, att_scores, att_vectors = decoder(
             encoder_output=encoder_output,
             encoder_hidden=encoder_hidden,
+            trg_encoder_output=trg_encoder_output,
+            trg_encoder_hidden=trg_encoder_hidden,
+            trg_mask=trg_mask,
             src_mask=src_mask,
             trg_embed=embed(decoder_input),
             hidden=hidden,

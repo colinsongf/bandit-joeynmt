@@ -65,6 +65,31 @@ class RecurrentEncoder(Encoder):
         if freeze:
             freeze_params(self)
 
+    def forward_unsorted(self, x, x_length, mask):
+        # apply dropout ot the rnn input
+        x = self.rnn_input_dropout(x)
+        output, hidden = self.rnn(x)
+        if isinstance(hidden, tuple):
+            hidden, memory_cell = hidden
+        batch_size = hidden.size()[1]
+        # separate final hidden states by layer and direction
+        hidden_layerwise = hidden.view(self.rnn.num_layers,
+                                       2 if self.rnn.bidirectional else 1,
+                                       batch_size, self.rnn.hidden_size)
+        # final_layers: layers x directions x batch x hidden
+
+        # concatenate the final states of the last layer for each directions
+        # thanks to pack_padded_sequence final states don't include padding
+        # TODO isn't needed?
+        fwd_hidden_last = hidden_layerwise[-1:, 0]
+        bwd_hidden_last = hidden_layerwise[-1:, 1]
+
+        # only feed the final state of the top-most layer to the decoder
+        hidden_concat = torch.cat(
+            [fwd_hidden_last, bwd_hidden_last], dim=2).squeeze(0)
+        # final: batch x directions*hidden
+        return output, hidden_concat
+
     def forward(self, x, x_length, mask):
         """
         Applies a bidirectional RNN to sequence of embeddings x.

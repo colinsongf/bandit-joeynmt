@@ -40,6 +40,14 @@ class Batch:
             self.trg_mask = (self.trg != pad_index)
             self.ntokens = (self.trg != pad_index).data.sum().item()
 
+        if hasattr(torch_batch, "mt"):
+            self.mt, self.mt_lengths = torch_batch.mt
+            self.mt_mask = (self.mt != pad_index)
+        else:
+            self.mt = None
+            self.mt_lengths = None
+            self.mt_mask = None
+
         if use_cuda:
             self._make_cuda()
 
@@ -56,6 +64,11 @@ class Batch:
             self.trg_input = self.trg_input.cuda()
             self.trg = self.trg.cuda()
             self.trg_mask = self.trg_mask.cuda()
+
+        if self.mt is not None:
+            self.mt = self.mt.cuda()
+            self.mt_mask = self.mt_mask.cuda()
+
 
     def sort_by_src_lengths(self):
         """
@@ -86,6 +99,11 @@ class Batch:
             self.trg_mask = sorted_trg_mask
             self.trg_lengths = sorted_trg_lengths
             self.trg = sorted_trg
+
+        if self.mt is not None:
+            self.mt = self.mt[perm_index]
+            self.mt_lengths = self.mt_lengths[perm_index]
+            self.mt_mask = self.mt_mask[perm_index]
 
         if self.use_cuda:
             self._make_cuda()

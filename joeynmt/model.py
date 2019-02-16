@@ -39,6 +39,8 @@ def build_model(cfg: dict = None,
         #reg_trg_embed = Embeddings(
         #    **cfg["regulator"]["embeddings"], vocab_size=len(trg_vocab),
         #    padding_idx=trg_padding_idx)
+    if cfg.get("pe", False):
+        assert src_embed.embedding_dim == trg_embed.embedding_dim
 
     encoder = RecurrentEncoder(**cfg["encoder"],
                                emb_size=src_embed.embedding_dim)
@@ -111,7 +113,7 @@ class Model(nn.Module):
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
         self.rewards = []
 
-    def forward(self, src, trg_input, src_mask, src_lengths):
+    def forward(self, src, trg_input, src_mask, src_lengths, trg=None, trg_length=None, trg_mask=None):
         """
         Take in and process masked src and target sequences.
         Use the encoder hidden state to initialize the decoder
@@ -123,15 +125,28 @@ class Model(nn.Module):
         :param src_lengths:
         :return: decoder outputs
         """
-        encoder_output, encoder_hidden = self.encode(src=src,
+        src_encoder_output, src_encoder_hidden = self.encode(src=src,
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
+        if trg is not None and trg_mask is not None:
+            # TODO is not sorted by length
+            trg_encoder_output, trg_encoder_hidden = self.encode_trg(trg=trg, trg_length=trg_length, trg_mask=trg_mask)
+        else:
+            trg_encoder_output, trg_encoder_hidden = None, None
+
         unrol_steps = trg_input.size(1)
-        decoder_output = self.decode(encoder_output=encoder_output,
-                           encoder_hidden=encoder_hidden,
-                           src_mask=src_mask, trg_input=trg_input,
+        decoder_output = self.decode(encoder_output=src_encoder_output,
+                                     trg_encoder_output=trg_encoder_output,
+                                     trg_encoder_hidden=trg_encoder_hidden,
+                           encoder_hidden=src_encoder_hidden,
+                           src_mask=src_mask, trg_mask=trg_mask, trg_input=trg_input,
                            unrol_steps=unrol_steps)
-        return encoder_output, encoder_hidden, decoder_output
+        return src_encoder_output, src_encoder_hidden, decoder_output
+
+    def encode_trg(self, trg, trg_length, trg_mask):
+        # not possible with packed sequence, since not sorted
+
+        return self.encoder.forward_unsorted(self.trg_embed(trg), trg_length, trg_mask)
 
     def encode(self, src, src_length, src_mask):
         """
@@ -146,7 +161,8 @@ class Model(nn.Module):
         return self.encoder(self.src_embed(src), src_length, src_mask)
 
     def decode(self, encoder_output, encoder_hidden, src_mask, trg_input,
-               unrol_steps, decoder_hidden=None):
+               unrol_steps, decoder_hidden=None,
+               trg_encoder_output=None, trg_encoder_hidden=None, trg_mask=None):
         """
         Decode, given an encoded source sentence.
         # TODO adapt to transformer
@@ -161,6 +177,9 @@ class Model(nn.Module):
         """
         return self.decoder(trg_embed=self.trg_embed(trg_input),
                             encoder_output=encoder_output,
+                            trg_encoder_hidden=trg_encoder_hidden,
+                            trg_encoder_output=trg_encoder_output,
+                            trg_mask=trg_mask,
                             encoder_hidden=encoder_hidden,
                             src_mask=src_mask,
                             unrol_steps=unrol_steps,
@@ -176,7 +195,7 @@ class Model(nn.Module):
         return self.regulator(src=self.reg_src_embed(src), src_length=src_length)
                             #  hyp=self.reg_trg_embed(hyp))
 
-    # TODO split batch according to regulator prediction
+    # split batch according to regulator prediction
     # then for each part of the batch compute parts
     # then sum loss
     # -> still mini-batching, but smaller
@@ -717,7 +736,9 @@ class Model(nn.Module):
         """
         encoder_out, encoder_hidden, decoder_out = \
             self.forward(src=batch.src, trg_input=batch.trg_input,
-                         src_mask=batch.src_mask, src_lengths=batch.src_lengths)
+                         src_mask=batch.src_mask, src_lengths=batch.src_lengths,
+                         trg=batch.mt, trg_length=batch.mt_lengths,
+                         trg_mask=batch.mt_mask)
         out, hidden, att_probs, _ = decoder_out
         batch_size = batch.src.size(0)
 
@@ -860,6 +881,15 @@ class Model(nn.Module):
             batch.src, batch.src_lengths,
             batch.src_mask)
 
+        if batch.mt is not None:
+            trg_encoder_output, trg_encoder_hidden = self.encode_trg(
+                batch.mt, batch.mt_lengths, batch.mt_mask
+            )
+            trg_mask = batch.mt_mask
+        else:
+            trg_encoder_output, trg_encoder_hidden = None, None
+            trg_mask = None
+
         # if maximum output length is not globally specified, adapt to src len
         if max_output_length is None:
             max_output_length = int(max(batch.src_lengths.cpu().numpy()) * 1.5)
@@ -868,6 +898,9 @@ class Model(nn.Module):
         if beam_size == 0:
             stacked_output, stacked_attention_scores = greedy(
                 encoder_hidden=encoder_hidden, encoder_output=encoder_output,
+                trg_encoder_hidden=trg_encoder_hidden,
+                trg_encoder_output=trg_encoder_output,
+                trg_mask=trg_mask,
                 src_mask=batch.src_mask, embed=self.trg_embed,
                 bos_index=self.bos_index, decoder=self.decoder,
                 max_output_length=max_output_length)
@@ -876,6 +909,9 @@ class Model(nn.Module):
             stacked_output, stacked_attention_scores = \
                 beam_search(size=beam_size, encoder_output=encoder_output,
                             encoder_hidden=encoder_hidden,
+                            trg_encoder_hidden=trg_encoder_hidden,
+                            trg_encoder_output=trg_encoder_output,
+                            trg_mask=trg_mask,
                             src_mask=batch.src_mask, embed=self.trg_embed,
                             max_output_length=max_output_length,
                             alpha=beam_alpha, eos_index=self.eos_index,

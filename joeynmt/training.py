@@ -1089,7 +1089,7 @@ def train(cfg_file):
             beam_alpha = -1
 
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
-        hypotheses_raw, attention_scores  = validate_on_data(
+        hypotheses_raw, attention_scores = validate_on_data(
             data=test_data, batch_size=trainer.valid_batch_size,
             eval_metric=trainer.eval_metric, level=trainer.level,
             max_output_length=trainer.max_output_length,

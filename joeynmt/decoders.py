@@ -27,6 +27,7 @@ class RecurrentDecoder(Decoder):
                  bridge: bool = False,
                  input_feeding: bool = True,
                  freeze: bool = False,
+                 trg_attention=None,
                  **kwargs):
         """
         Create a recurrent decoder.
@@ -95,6 +96,26 @@ class RecurrentDecoder(Decoder):
         if self.bridge:
             self.bridge_layer = nn.Linear(
                 encoder.output_size, hidden_size, bias=True)
+            if type == "lstm":
+                self.bridge_mem_layer = nn.Linear(
+                encoder.output_size, hidden_size, bias=True)
+
+        if trg_attention is not None:
+            if attention == "bahdanau":
+                self.trg_attention = BahdanauAttention(hidden_size=hidden_size,
+                                                   key_size=encoder.output_size,
+                                                   query_size=hidden_size)
+            elif attention == "luong":
+                self.trg_attention = LuongAttention(hidden_size=hidden_size,
+                                                key_size=encoder.output_size)
+            else:
+                raise ValueError("Unknown trg attention mechanism: %s" % attention)
+
+            self.context_merge_layer = nn.Linear(encoder.output_size*2,
+                                                 encoder.output_size)
+        else:
+            self.trg_attention = None
+            self.context_merge_layer = None
 
         if freeze:
             freeze_params(self)
@@ -103,6 +124,8 @@ class RecurrentDecoder(Decoder):
                       prev_embed: Tensor = None,
                       prev_att_vector: Tensor = None,  # context or att vector
                       encoder_output: Tensor = None,
+                      trg_encoder_output: Tensor = None,
+                      trg_mask: Tensor = None,
                       src_mask: Tensor = None,
                       hidden: Tensor = None):
         """
@@ -145,6 +168,19 @@ class RecurrentDecoder(Decoder):
         context, att_probs = self.attention(
             query=query, values=encoder_output, mask=src_mask)
 
+        if self.trg_attention is not None:
+            #print("trg encoder output", trg_encoder_output.shape)
+            #print("trg mask", trg_mask.shape)
+            # attend trg hidden states
+            trg_context, trg_att_probs = self.trg_attention(
+                query=query, values=trg_encoder_output, mask=trg_mask.unsqueeze(1)
+            )
+            # merge contexts
+            # TODO is this how they do it in the paper?
+            #print("src cont", context.shape)
+            #print("trg cont", trg_context.shape)
+            context = torch.tanh(self.context_merge_layer(torch.cat([context, trg_context], dim=-1)))
+
         # return attention vector (Luong)
         # combine context with decoder hidden state before prediction
         att_vector_input = torch.cat([query, context], dim=2)
@@ -157,7 +193,8 @@ class RecurrentDecoder(Decoder):
         return att_vector, hidden, att_probs
 
     def forward(self, trg_embed, encoder_output, encoder_hidden,
-                src_mask, unrol_steps, hidden=None, prev_att_vector=None):
+                src_mask, unrol_steps, hidden=None, prev_att_vector=None,
+                trg_encoder_output=None, trg_encoder_hidden=None, trg_mask=None):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
 
@@ -173,6 +210,7 @@ class RecurrentDecoder(Decoder):
 
         # initialize decoder hidden state from final encoder hidden state
         if hidden is None:
+            # TODO trg?
             hidden = self.init_hidden(encoder_hidden)
 
         # pre-compute projected encoder outputs
@@ -180,6 +218,10 @@ class RecurrentDecoder(Decoder):
         # this is only done for efficiency
         if hasattr(self.attention, "compute_proj_keys"):
             self.attention.compute_proj_keys(encoder_output)
+
+        if self.trg_attention is not None:
+            if hasattr(self.trg_attention, "compute_proj_keys"):
+                self.trg_attention.compute_proj_keys(trg_encoder_output)
 
         # here we store all intermediate attention vectors (used for prediction)
         att_vectors = []
@@ -199,6 +241,8 @@ class RecurrentDecoder(Decoder):
                 prev_embed=prev_embed,
                 prev_att_vector=prev_att_vector,
                 encoder_output=encoder_output,
+                trg_encoder_output=trg_encoder_output,
+                trg_mask=trg_mask,
                 src_mask=src_mask,
                 hidden=hidden)
             att_vectors.append(prev_att_vector)
@@ -232,7 +276,18 @@ class RecurrentDecoder(Decoder):
                 h = encoder_final.new_zeros(self.num_layers, batch_size,
                                             self.hidden_size)
 
+        #if isinstance(self.rnn, nn.LSTM): # special treatment for LSTM mem state
+        #    if self.bridge:
+        #        c = torch.tanh(
+        #        self.bridge_mem_layer(encoder_final)).unsqueeze(0).repeat(
+        #        self.num_layers, 1, 1)
+        #    else:
+        #        with torch.no_grad():
+        #            c = encoder_final.new_zeros(self.num_layers, batch_size,
+        #                                        self.hidden_size)
+
         return (h, h) if isinstance(self.rnn, nn.LSTM) else h
+        #return (h, c) if isinstance(self.rnn, nn.LSTM) else h
 
     def __repr__(self):
         return "RecurrentDecoder(rnn=%r, attention=%r)" % (
