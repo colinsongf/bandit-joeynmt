@@ -96,9 +96,9 @@ class RecurrentDecoder(Decoder):
         if self.bridge:
             self.bridge_layer = nn.Linear(
                 encoder.output_size, hidden_size, bias=True)
-            if type == "lstm":
-                self.bridge_mem_layer = nn.Linear(
-                encoder.output_size, hidden_size, bias=True)
+            #if type == "lstm":
+            #    self.bridge_mem_layer = nn.Linear(
+            #    encoder.output_size, hidden_size, bias=True)
 
         if trg_attention is not None:
             if attention == "bahdanau":
