@@ -113,6 +113,7 @@ class RecurrentDecoder(Decoder):
 
             self.context_merge_layer = nn.Linear(encoder.output_size*2,
                                                  encoder.output_size)
+            self.context_dropout = torch.nn.Dropout(p=dropout, inplace=False)
         else:
             self.trg_attention = None
             self.context_merge_layer = None
@@ -176,10 +177,12 @@ class RecurrentDecoder(Decoder):
                 query=query, values=trg_encoder_output, mask=trg_mask.unsqueeze(1)
             )
             # merge contexts
-            # TODO is this how they do it in the paper?
+            # TODO no nonlin. in paper
+            # TODO dropout before merge
             #print("src cont", context.shape)
             #print("trg cont", trg_context.shape)
-            context = torch.tanh(self.context_merge_layer(torch.cat([context, trg_context], dim=-1)))
+            context = self.context_merge_layer(torch.cat([context, trg_context], dim=-1))
+            context = self.context_dropout(context)
 
         # return attention vector (Luong)
         # combine context with decoder hidden state before prediction
