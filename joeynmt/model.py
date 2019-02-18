@@ -389,16 +389,26 @@ class Model(nn.Module):
                         continue
 
             if weak_baseline:
-                # baseline over time
-                # TODO over batch?
-                markings -= np.mean(markings, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(markings).float()).sum(1)
+                if len(self.rewards) > 0:
+                    # subtract mean from reward
+                    new_markings = markings - np.mean(self.rewards)
+                else:
+                    new_markings = markings
+                #update baseline
+                self.rewards.extend(markings)
+            else:
+                new_markings = markings
+           # if weak_baseline:
+           #     # baseline over time
+           #     # TODO over batch?
+           #     markings -= np.mean(markings, axis=1, keepdims=True)
+            chunk_loss = (sample_nll * src_mask.new(new_markings).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
             for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
                                             refs_np_decoded_list[:3], decoded_srcs[:3],
                                             -sample_nll[:3].sum(1),
-                                            markings[:3]):
+                                            new_markings[:3]):
                 logger.info("\tSource: {}".format(src))
                 logger.info(
                     "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
@@ -406,6 +416,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tMarkings {}".format([(h, m) for h, m in zip(hyp, mark)]))
+            logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "match":
             # 1 if occurs in reference, 0 if it doesn't
@@ -425,21 +436,32 @@ class Model(nn.Module):
                     # skip to next row if eos has been marked
                     if val == self.eos_index:
                         break
+
+            if weak_baseline:
+                if len(self.rewards) > 0:
+                    # subtract mean from reward
+                    new_matches = matches - np.mean(self.rewards)
+                else:
+                    new_matches = matches
+                # update baseline
+                self.rewards.extend(matches)
+            else:
+                new_matches = matches
 #            print("hyp", sample_hyp_pad)
 #            print("ref", trg_np)
 #            print("matches", matches)
-            if weak_baseline:
-                # baseline over time
-                # TODO over batch?
-                matches -= np.mean(matches, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(matches).float()).sum(1)
+            #if weak_baseline:
+            #    # baseline over time
+            #    # TODO over batch?
+            #    matches -= np.mean(matches, axis=1, keepdims=True)
+            chunk_loss = (sample_nll * src_mask.new(new_matches).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
             for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
                                                     decoded_srcs[:3],
                                                     -sample_nll[:3].sum(1),
-                                               matches[:3]):
+                                               new_matches[:3]):
                 logger.info("\tSource: {}".format(src))
 
                 logger.info(
@@ -448,6 +470,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tMatching {}".format([(h, m) for h, m in zip(hyp, mark)]))
+            logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "lcs":
             #def token_lcs_reward(gold, pred):
@@ -476,12 +499,23 @@ class Model(nn.Module):
                 r = longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
                     all_rewards[j, i] = r_i  # r does not cover padding area
-            if weak_baseline:
-                # baseline over time
-                # TODO over batch?
-                all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
 
-            chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
+            if weak_baseline:
+                if len(self.rewards) > 0:
+                    # subtract mean from reward
+                    new_rewards = all_rewards - np.mean(self.rewards)
+                else:
+                    new_rewards = all_rewards
+                # update baseline
+                self.rewards.extend(all_rewards)
+            else:
+                new_rewards = all_rewards
+            #if weak_baseline:
+            #    # baseline over time
+            #    # TODO over batch?
+            #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
+
+            chunk_loss = (sample_nll * src_mask.new(new_rewards).float()).sum(1)
 
 
             logger.info("Examples from weak supervision:")
@@ -489,7 +523,7 @@ class Model(nn.Module):
                                                refs_np_decoded_list[:3],
                                                decoded_srcs[:3],
                                                -sample_nll[:3].sum(1),
-                                               all_rewards[:3]):
+                                               new_rewards[:3]):
                 logger.info("\tSrc: {}".format(src))
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
@@ -497,6 +531,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tLCS {}".format([(h, m) for h, m in zip(hyp, mark)]))
+            logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "lcs-all":
             #def token_lcs_reward(gold, pred):
@@ -537,11 +572,22 @@ class Model(nn.Module):
             # TODO remove rewards for duplications: only reinforce as often as in reference
 
             if weak_baseline:
-                # baseline over time
-                # TODO over batch?
-                all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
+                if len(self.rewards) > 0:
+                    # subtract mean from reward
+                    new_rewards =  all_rewards - np.mean(self.rewards)
+                else:
+                    new_rewards = all_rewards
+                #update baseline
+                self.rewards.extend(all_rewards)
+            else:
+                new_rewards = all_rewards
 
-            chunk_loss = (sample_nll * src_mask.new(all_rewards).float()).sum(1)
+            #if weak_baseline:
+            #    # baseline over time
+            #    # TODO over batch?
+            #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
+
+            chunk_loss = (sample_nll * src_mask.new(new_rewards).float()).sum(1)
 
 
             logger.info("Examples from weak supervision:")
@@ -549,7 +595,7 @@ class Model(nn.Module):
                                                refs_np_decoded_list[:3],
                                                 decoded_srcs[:3],
                                                -sample_nll[:3].sum(1),
-                                               all_rewards[:3]):
+                                               new_rewards[:3]):
                 logger.info("\tSrc: {}".format(src))
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
@@ -557,6 +603,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tLCS-ALL{}".format([(h, m) for h, m in zip(hyp, mark)]))
+            logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         else:
             # post-process for BPE
