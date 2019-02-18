@@ -16,7 +16,10 @@ if __name__ == "__main__":
 
     ters = []
     for h, r in zip(hyps, refs):
-        ters.append(pyter.ter(inputwords=h, refwords=r))
+        if len(r) == 0:
+            ters.append(0)
+        else:
+            ters.append(pyter.ter(inputwords=h, refwords=r))
     ter = np.mean(ters)
 
     print("avg TER: ", ter)
