@@ -129,8 +129,9 @@ class Model(nn.Module):
                                                      src_length=src_lengths,
                                                      src_mask=src_mask)
         if trg is not None and trg_mask is not None:
-            # TODO is not sorted by length
-            trg_encoder_output, trg_encoder_hidden = self.encode_trg(trg=trg, trg_length=trg_length, trg_mask=trg_mask)
+            # needs extra treatment since not sorted by length
+            trg_encoder_output, trg_encoder_hidden = self.encode_trg(
+                trg=trg, trg_length=trg_length, trg_mask=trg_mask)
         else:
             trg_encoder_output, trg_encoder_hidden = None, None
 
@@ -146,7 +147,8 @@ class Model(nn.Module):
     def encode_trg(self, trg, trg_length, trg_mask):
         # not possible with packed sequence, since not sorted
 
-        return self.encoder.forward_unsorted(self.trg_embed(trg), trg_length, trg_mask)
+        return self.encoder.forward_unsorted(
+            self.trg_embed(trg), trg_length, trg_mask)
 
     def encode(self, src, src_length, src_mask):
         """
