@@ -15,7 +15,7 @@ from joeynmt.vocabulary import Vocabulary
 from torch.distributions import Categorical
 from joeynmt.metrics import sbleu, ster, sgleu
 from joeynmt.helpers import arrays_to_sentences
-
+import pyter
 
 
 def build_model(cfg: dict = None,
@@ -537,7 +537,7 @@ class Model(nn.Module):
             #def token_lcs_reward(gold, pred):
                 # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
                 # idea from http://www.aclweb.org/anthology/P18-2052
-                # TODO adapt to all longest substrings
+                # adapted to all longest substrings
             def all_longest_common_substring_rewards(pred, gold):
                 m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
                 # collect all length of all longest spans here
@@ -574,7 +574,7 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards =  all_rewards - np.mean(self.rewards)
+                    new_rewards = all_rewards - np.mean(self.rewards)
                 else:
                     new_rewards = all_rewards
                 #update baseline
@@ -639,7 +639,7 @@ class Model(nn.Module):
                                                 refs_np_decoded[:3],
                                                 decoded_srcs[:3],
                                                 -sample_nll[:3].sum(1),
-                                                rewards):
+                                                rewards[:3]):
                     logger.info("\tSrc: {}".format(src))
                     logger.info(
                         "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
@@ -735,18 +735,26 @@ class Model(nn.Module):
 
         join_char = " " if level in ["word", "bpe"] else ""
 
-        decoded_ref_list = [join_char.join(t).split(" ") for t in arrays_to_sentences(selected_target,
+        decoded_refs = [join_char.join(t) for t in arrays_to_sentences(selected_target,
                                           vocabulary=self.trg_vocab)]
-        #print("decoded_ref", decoded_ref)
-        decoded_hyp_list = [join_char.join(t).split(" ") for t in arrays_to_sentences(selected_output,
+        decoded_ref_list = [t.split(" ") for t in decoded_refs]
+        #print("decoded_refs", decoded_refs)
+        decoded_hyps = [join_char.join(t) for t in arrays_to_sentences(selected_output,
                                           vocabulary=self.trg_vocab)]
+        decoded_hyp_list = [t.split(" ") for t in decoded_hyps]
+
+        # compute cost: character edit distance? = number of characters to type
+        chr_edit_distances = [pyter.edit_distance(list(h), list(r)) for h, r in zip(decoded_hyps, decoded_refs)]
+        costs = chr_edit_distances
+        #print(chr_edit_distances)
+
         # compute cost: TER*ref_len -> absolute number of edits
         #print("decoded_hyp", decoded_hyp)
-        ters = ster(hypotheses=decoded_hyp_list, references=decoded_ref_list)
+        #ters = ster(hypotheses=decoded_hyp_list, references=decoded_ref_list)
         #print("ters", ters)
-        ref_lens = [len(t) for t in decoded_ref_list]
+        #ref_lens = [len(t) for t in decoded_ref_list]
         #print("ref lens", ref_lens)
-        costs = [r*c for r, c in zip(ters, ref_lens)]
+        #costs = [r*c for r, c in zip(ters, ref_lens)]
         #print("#edits", costs)
         assert full_sup_loss.size(0) == selected_batch_size
         return full_sup_loss.sum(), selected_tokens, selected_batch_size, costs
