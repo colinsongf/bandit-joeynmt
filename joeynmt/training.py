@@ -558,7 +558,7 @@ class TrainManager:
                             valid_score_immediate, valid_loss_immediate, \
                             valid_ppl_immediate, _, \
                             _, _, _, \
-                            _, _ = \
+                            _, _, _ = \
                                 validate_on_data(
                                     batch_size=self.valid_batch_size, data=valid_data,
                                     eval_metric=self.eval_metric,
@@ -655,7 +655,7 @@ class TrainManager:
 
                     valid_score, valid_loss, valid_ppl, valid_sources, \
                         valid_sources_raw, valid_references, valid_hypotheses, \
-                        valid_hypotheses_raw, valid_attention_scores = \
+                        valid_hypotheses_raw, valid_attention_scores, valid_mts = \
                         validate_on_data(
                             batch_size=self.valid_batch_size, data=valid_data,
                             eval_metric=self.eval_metric,
@@ -674,7 +674,8 @@ class TrainManager:
                         valid_attention_scores=valid_attention_scores,
                         valid_loss=valid_loss, valid_score=valid_score,
                         valid_ppl=valid_ppl, store_attention=True,
-                        store_outputs=True, valid_start_time=valid_start_time)
+                        store_outputs=True, valid_start_time=valid_start_time,
+                        valid_mts=valid_mts)
 
                 if self.stop:
                     break
@@ -696,7 +697,8 @@ class TrainManager:
                            valid_hypotheses_raw, valid_hypotheses,
                            valid_attention_scores,
                            valid_start_time, epoch_no,
-                           store_outputs=True, store_attention=False):
+                           store_outputs=True, store_attention=False,
+                           valid_mts=None):
         if self.ckpt_metric == "loss":
             ckpt_score = valid_loss
         elif self.ckpt_metric in ["ppl", "perplexity"]:
@@ -752,6 +754,9 @@ class TrainManager:
                     valid_sources_raw[p]))
                 self.logger.debug("\tSource: {}".format(
                     valid_sources[p]))
+                if valid_mts is not None:
+                    self.logger.debug("\tMT: {}".format(
+                        valid_mts[p]))
                 self.logger.debug("\tReference: {}".format(
                     valid_references[p]))
                 self.logger.debug("\tRaw hypothesis: {}".format(
@@ -1089,7 +1094,7 @@ def train(cfg_file):
             beam_alpha = -1
 
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
-        hypotheses_raw, attention_scores = validate_on_data(
+        hypotheses_raw, attention_scores, mts = validate_on_data(
             data=test_data, batch_size=trainer.valid_batch_size,
             eval_metric=trainer.eval_metric, level=trainer.level,
             max_output_length=trainer.max_output_length,

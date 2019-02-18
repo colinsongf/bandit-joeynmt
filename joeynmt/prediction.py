@@ -92,6 +92,11 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
         valid_sources = [join_char.join(s) for s in data.src]
         valid_references = [join_char.join(t) for t in data.trg]
         valid_hypotheses = [join_char.join(t) for t in decoded_valid]
+        if "mt" in data.fields:
+            print("PE")
+            valid_mts = [join_char.join(t) for t in data.mt]
+        else:
+            valid_mts = None
 
         # post-process
         if level == "bpe":
@@ -126,7 +131,7 @@ def validate_on_data(model, data, batch_size, use_cuda, max_output_length,
     return current_valid_score, valid_loss, valid_ppl, valid_sources, \
            valid_sources_raw, valid_references, valid_hypotheses, \
            decoded_valid, \
-           valid_attention_scores
+           valid_attention_scores, valid_mts
 
 
 def test(cfg_file,
@@ -197,7 +202,7 @@ def test(cfg_file,
     for data_set_name, data_set in data_to_predict.items():
 
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
-        hypotheses_raw, attention_scores = validate_on_data(
+        hypotheses_raw, attention_scores, mts = validate_on_data(
             model, data=data_set, batch_size=valid_batch_size, level=level,
             max_output_length=max_output_length, eval_metric=eval_metric,
             use_cuda=use_cuda, criterion=None, beam_size=beam_size,
