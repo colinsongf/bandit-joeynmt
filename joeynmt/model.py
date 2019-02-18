@@ -324,16 +324,18 @@ class Model(nn.Module):
                                    bos_index=self.bos_index,
                                    decoder=self.decoder)
 
-        sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
-                             fill_value=self.pad_index)
-        for i, row in enumerate(sample_hyp):
-            for j, col in enumerate(row):
-                sample_hyp_pad[i, j] = col
+        sample_mask = np.not_equal(sample_hyp, self.pad_index).astype(int)
+
+        #sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
+        #                     fill_value=self.pad_index)
+        #for i, row in enumerate(sample_hyp):
+        #    for j, col in enumerate(row):
+        #        sample_hyp_pad[i, j] = col
         # print("padded", bs_hyp_pad)
         bos_array = np.full(shape=(selected_batch_size, 1),
                             fill_value=self.bos_index)
         # prepend bos but cut off one bos
-        sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp_pad),
+        sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp),
                                         axis=1)[:, :-1]
         # print("with bos", bs_hyp_pad_bos)
 
@@ -346,7 +348,7 @@ class Model(nn.Module):
                                       unrol_steps=sample_hyp_pad_bos.shape[1])
         sample_log_probs = F.log_softmax(sample_out, dim=-1)
 
-        sample_target = src_mask.new(sample_hyp_pad).long()
+        sample_target = src_mask.new(sample_hyp).long()
 
         sample_nll = criterion(
             input=sample_log_probs.contiguous().view(-1, sample_log_probs.size(-1)),
@@ -366,10 +368,18 @@ class Model(nn.Module):
         hyps_decoded = [join_char.join(t) for t in hyps_decoded_list]
 
         # decode source
-
         decoded_srcs = [join_char.join(t) for t in
                         arrays_to_sentences(selected_srcs,
                                             vocabulary=self.src_vocab)]
+
+        # post-process for BPE
+        if level == "bpe":
+            # merge byte pairs
+            hyps_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
+            refs_np_decoded = [t.replace("@@ ", "") for t in
+                               refs_np_decoded]
+            hyps_decoded_list = [t.split(" ") for t in hyps_decoded]
+            refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
 
         if chunk_type == "marking":
             # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
@@ -379,30 +389,37 @@ class Model(nn.Module):
             # print("trg", trg_np)
             # padding area is zero
             # TODO use case sensitivity
-            markings = np.zeros_like(sample_hyp_pad, dtype=float)
+            markings = np.zeros_like(sample_hyp, dtype=float)
+            # for baseline we don't track padding rewards since zeros
+            valid_rewards = []
             for i, row in enumerate(sample_hyp):
                 for j, val in enumerate(row):
                     try:
                         if trg_np[i, j] == val:
                             markings[i, j] = 1.
+                            if sample_mask[i, j]:
+                                valid_rewards.append(1)
+                        elif sample_mask[i, j]:
+                            valid_rewards.append(0)
                     except IndexError:  # BS is longer than trg
                         continue
-
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_markings = markings - np.mean(self.rewards)
+                    new_markings = (markings - np.mean(self.rewards))*sample_mask
                 else:
                     new_markings = markings
                 #update baseline
-                self.rewards.extend(markings)
+               # print("valid", valid_rewards)
+                self.rewards.extend(valid_rewards)
             else:
                 new_markings = markings
+            #print("final", new_markings*sample_mask)
            # if weak_baseline:
            #     # baseline over time
            #     # TODO over batch?
            #     markings -= np.mean(markings, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(new_markings).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_markings*sample_mask).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
             for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
@@ -422,7 +439,8 @@ class Model(nn.Module):
             # 1 if occurs in reference, 0 if it doesn't
             # position-independent
             # TODO include case sensitivity
-            matches = np.zeros_like(sample_hyp_pad, dtype=float)
+            valid_matches = []
+            matches = np.zeros_like(sample_hyp, dtype=float)
             for i, row in enumerate(sample_hyp):
                 for j, val in enumerate(row):
                     # skip to next row if pad reached
@@ -431,6 +449,9 @@ class Model(nn.Module):
                     try:
                         if val in trg_np[i]:
                             matches[i, j] = 1.
+                            valid_matches.append(1)
+                        else:
+                            valid_matches.append(0)
                     except IndexError:  # BS is longer than trg
                         continue
                     # skip to next row if eos has been marked
@@ -440,11 +461,11 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_matches = matches - np.mean(self.rewards)
+                    new_matches = (matches - np.mean(self.rewards))*sample_mask
                 else:
                     new_matches = matches
                 # update baseline
-                self.rewards.extend(matches)
+                self.rewards.extend(valid_matches)
             else:
                 new_matches = matches
 #            print("hyp", sample_hyp_pad)
@@ -454,7 +475,7 @@ class Model(nn.Module):
             #    # baseline over time
             #    # TODO over batch?
             #    matches -= np.mean(matches, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(new_matches).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_matches*sample_mask).float()).sum(1)
 
             logger.info("Examples from weak supervision:")
             for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
@@ -483,7 +504,8 @@ class Model(nn.Module):
                 rewards = np.zeros(len(pred))
                 for x in range(1, 1 + len(pred)):
                     for y in range(1, 1 + len(gold)):
-                        if pred[x - 1] == gold[y - 1]:
+                        # prevent padding area from getting rewarded
+                        if pred[x - 1] == gold[y - 1] and pred[x-1] != self.pad_index and gold[y-1] != self.pad_index:
                             m[x][y] = m[x - 1][y - 1] + 1
                             if m[x][y] > longest:
                                 longest = m[x][y]
@@ -494,20 +516,25 @@ class Model(nn.Module):
                 #return pred[x_longest - longest: x_longest]
                 return rewards
 
-            all_rewards = np.zeros_like(sample_hyp_pad, dtype=float)
+            all_rewards = np.zeros_like(sample_hyp, dtype=float)
             for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
                 r = longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
-                    all_rewards[j, i] = r_i  # r does not cover padding area
-
+                    all_rewards[j, i] = r_i  # r does cover padding area
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards = all_rewards - np.mean(self.rewards)
+                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_mask
                 else:
                     new_rewards = all_rewards
                 # update baseline
-                self.rewards.extend(all_rewards)
+                # only with non-padding areas
+                valid_rewards = []
+                for r, m in zip(all_rewards, sample_mask):
+                    for r_i, m_i in zip(r, m):
+                        if m_i:
+                            valid_rewards.append(r_i)
+                self.rewards.extend(valid_rewards)
             else:
                 new_rewards = all_rewards
             #if weak_baseline:
@@ -515,7 +542,7 @@ class Model(nn.Module):
             #    # TODO over batch?
             #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
 
-            chunk_loss = (sample_nll * src_mask.new(new_rewards).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_mask).float()).sum(1)
 
 
             logger.info("Examples from weak supervision:")
@@ -546,7 +573,7 @@ class Model(nn.Module):
                 rewards = np.zeros(len(pred))
                 for x in range(1, 1 + len(pred)):
                     for y in range(1, 1 + len(gold)):
-                        if pred[x - 1] == gold[y - 1]:
+                        if pred[x - 1] == gold[y - 1] and pred[x-1] != self.pad_index and gold[y-1] != self.pad_index:
                             m[x][y] = m[x - 1][y - 1] + 1
                             if m[x][y] >= longest:
                                 old = len_start.get(m[x][y], set())
@@ -559,12 +586,13 @@ class Model(nn.Module):
                         else:
                             m[x][y] = 0
                 #rewards[x_longest - longest: x_longest] = 1
-                for pos in len_start[longest]:
-                    rewards[pos - longest: pos] = 1
-                #return pred[x_longest - longest: x_longest]
+                if len(len_start) > 0:  # skipped if no overlap found
+                    for pos in len_start[longest]:
+                        rewards[pos - longest: pos] = 1
+                    #return pred[x_longest - longest: x_longest]
                 return rewards
 
-            all_rewards = np.zeros_like(sample_hyp_pad, dtype=float)
+            all_rewards = np.zeros_like(sample_hyp, dtype=float)
             for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
                 r = all_longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
@@ -574,11 +602,17 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards = all_rewards - np.mean(self.rewards)
+                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_mask
                 else:
                     new_rewards = all_rewards
-                #update baseline
-                self.rewards.extend(all_rewards)
+                # update baseline
+                # only with non-padding areas
+                valid_rewards = []
+                for r, m in zip(all_rewards, sample_mask):
+                    for r_i, m_i in zip(r, m):
+                        if m_i:
+                            valid_rewards.append(r_i)
+                self.rewards.extend(valid_rewards)
             else:
                 new_rewards = all_rewards
 
@@ -587,7 +621,7 @@ class Model(nn.Module):
             #    # TODO over batch?
             #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
 
-            chunk_loss = (sample_nll * src_mask.new(new_rewards).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_mask).float()).sum(1)
 
 
             logger.info("Examples from weak supervision:")
