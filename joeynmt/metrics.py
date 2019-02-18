@@ -3,6 +3,7 @@
 import sacrebleu
 import pyter
 from collections import Counter
+import numpy as np
 
 def chrf(hypotheses, references, case_sensitive=True):
     """
@@ -23,30 +24,30 @@ def chrf(hypotheses, references, case_sensitive=True):
 def ter(hypotheses, references, case_sensitive=True):
     """
     TER
-    :param hypotheses:
-    :param references:
+    :param hypotheses: list of list of tokens
+    :param references: list of list of tokens
     :return:
     """
     assert len(hypotheses) == len(references)
     if not case_sensitive:
-        hypotheses = [h.lower() for h in hypotheses]
-        references = [r.lower for r in references]
+        hypotheses = [[hi.lower() for hi in h] for h in hypotheses]
+        references = [[ri.lower() for ri in r] for r in references]
     ters = ster(hypotheses, references)
-    return sum(ters)/len(ters)  # if len(ters) > 0 else sum(ters))
+    return np.mean(ters)  # if len(ters) > 0 else sum(ters))
 
 
 def ster(hypotheses, references, case_sensitive=True):
     """
     Sentence-wise computation of TER
-    :param hypotheses:
-    :param references:
+    :param hypotheses: list of list of tokens
+    :param references: list of list of tokens
     :return:
     """
     sters = []
     for hyp, ref in zip(hypotheses, references):
         if not case_sensitive:
-            hyp = hyp.lower()
-            ref = ref.lower()
+            hyp = [hi.lower() for hi in hyp]
+            ref = [ri.lower() for ri in ref]
         ster = pyter.ter(hyp, ref)
         sters.append(ster)
     return sters
