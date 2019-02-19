@@ -15,11 +15,18 @@ if __name__ == "__main__":
     print("Scoring {} refs/hyps with PyTER.".format(len(refs)))
 
     ters = []
+    total_edits = 0
+    total_ref_tokens = 0
     for h, r in zip(hyps, refs):
         if len(r) == 0:
             ters.append(0)
         else:
-            ters.append(pyter.ter(inputwords=h, refwords=r))
-    ter = np.mean(ters)
+            edit_dist = pyter.edit_distance(h, r)
+            total_edits += edit_dist
+            total_ref_tokens += len(r)
+            ters.append(edit_dist/len(r))
+    avg_ter = np.mean(ters)
+    corpus_ter = total_edits / total_ref_tokens
 
-    print("avg TER: ", ter)
+    print("avg TER: ", avg_ter)
+    print("corpus TER: ", corpus_ter)
