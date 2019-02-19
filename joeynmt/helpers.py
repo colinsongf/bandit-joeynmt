@@ -96,6 +96,41 @@ def build_vocab(field, max_size, min_freq, data, vocab_file=None):
 
     return vocab
 
+def sentence_to_array(sentence, vocabulary, max_length, pad_index):
+    """
+    Converts a sentence into a sequence of IDs, padded up or cut to max_length
+
+    :param sentence:
+    :param vocabulary:
+    :param max_length:
+    :param pad_index:
+    :return:
+    """
+    array = np.full(shape=(max_length), fill_value=pad_index)
+    for i, word in enumerate(sentence):
+        if i >= max_length:
+            break
+        array[i] = vocabulary.stoi[word]
+    try:
+        array[i+1] = vocabulary.stoi[EOS_TOKEN]
+    except IndexError:
+        try:
+            array[i] = vocabulary.stoi[EOS_TOKEN]
+        except IndexError:
+            array[i-1] = vocabulary.stoi[EOS_TOKEN]
+    return array
+
+def sentences_to_arrays(sentences, vocabulary, max_length, pad_index):
+    """
+    Converts multiple sentences into their ids
+
+    :param sentences:
+    :param vocabulary:
+    :param max_length:
+    :param pad_index:
+    :return:
+    """
+    return np.stack([sentence_to_array(s, vocabulary=vocabulary, max_length=max_length, pad_index=pad_index) for s in sentences])
 
 def array_to_sentence(array, vocabulary, cut_at_eos=True):
     """

@@ -257,7 +257,8 @@ class TrainManager:
         self.logger.info("Using temp={} for weak feedback.".format(self.weak_temperature))
         self.weak_case_sensitive = train_config.get("weak_case_sensitive", True)
         self.logger.info("Using case sensitive weak feedback? {}".format(self.weak_case_sensitive))
-
+        self.pe_ratio = train_config.get("pe_ratio", 1.0)
+        self.logger.info("Using PEs with ratio {}".format(self.pe_ratio))
 
     def save_checkpoint(self):
         """
@@ -805,7 +806,8 @@ class TrainManager:
                         weak_baseline=self.weak_baseline,
                         weak_temperature=self.weak_temperature,
                         logger=self.logger,
-                        case_sensitive=self.weak_case_sensitive)
+                        case_sensitive=self.weak_case_sensitive,
+                        pe_ratio=self.pe_ratio)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
@@ -893,6 +895,8 @@ class TrainManager:
         #trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
         # TODO different combination?
         # TODO check signs are correct
+
+        # improvement in reward per increase in cost -> (r-r_prev) / cost
         self.logger.debug("COST: {}, REWARD: {}".format(costs, reward))
         self.logger.debug("PREDS: {}".format(regulator_pred))
         trade_off = reward - self.cost_weight*costs
