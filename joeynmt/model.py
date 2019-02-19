@@ -249,11 +249,12 @@ class Model(nn.Module):
             -1)  # batch
 
         if entropy:
+            logger.info("before entropy addition: {}".format(self_sup_loss))
             entropy = (-torch.exp(bs_log_probs) * bs_log_probs).sum(
                 -1).mean(1)
-            # print("entropy", entropy)
-            self_sup_loss = self_sup_loss - entropy  # *confidence.detach()
-            # print("weighted", self_sup_loss)
+            logger.info("entropy: {}".format(entropy))
+            self_sup_loss = self_sup_loss + entropy.detach()  # *confidence.detach()
+            logger.info("entropy-weighted: {}".format(self_sup_loss))
         # TODO logprob selection can actually be done for all, just return chosen hyp and reward
         # then logprobs are selected and multiplied by reward
 
