@@ -249,11 +249,12 @@ class Model(nn.Module):
             -1)  # batch
 
         if entropy:
+            logger.info("before entropy subtraction: {}".format(self_sup_loss))
             entropy = (-torch.exp(bs_log_probs) * bs_log_probs).sum(
                 -1).mean(1)
-            # print("entropy", entropy)
-            self_sup_loss = self_sup_loss - entropy  # *confidence.detach()
-            # print("weighted", self_sup_loss)
+            logger.info("entropy: {}".format(entropy))
+            self_sup_loss = self_sup_loss - entropy #.detach()  # *confidence.detach()
+            logger.info("entropy-weighted: {}".format(self_sup_loss))
         # TODO logprob selection can actually be done for all, just return chosen hyp and reward
         # then logprobs are selected and multiplied by reward
 
@@ -422,12 +423,13 @@ class Model(nn.Module):
            #     # TODO over batch?
            #     markings -= np.mean(markings, axis=1, keepdims=True)
             chunk_loss = (sample_nll * src_mask.new(new_markings*sample_mask).float()).sum(1)
+            costs = markings.sum(-1)
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
                                             refs_np_decoded_list[:3], decoded_srcs[:3],
                                             -sample_nll[:3].sum(1),
-                                            new_markings[:3]):
+                                            new_markings[:3], costs[:3]):
                 logger.info("\tSource: {}".format(src))
                 logger.info(
                     "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
@@ -435,6 +437,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tMarkings {}".format([(h, m) for h, m in zip(hyp, mark)]))
+                logger.info("\tCost {}".format(cost))
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "match":
@@ -479,12 +482,16 @@ class Model(nn.Module):
             #    matches -= np.mean(matches, axis=1, keepdims=True)
             chunk_loss = (sample_nll * src_mask.new(new_matches*sample_mask).float()).sum(1)
 
+            costs = matches.sum(-1)
+
+
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
                                                     decoded_srcs[:3],
                                                     -sample_nll[:3].sum(1),
-                                               new_matches[:3]):
+                                               new_matches[:3],
+                                                          costs[:3]):
                 logger.info("\tSource: {}".format(src))
 
                 logger.info(
@@ -493,6 +500,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tMatching {}".format([(h, m) for h, m in zip(hyp, mark)]))
+                logger.info("\tCost: {}".format(cost))
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "lcs":
@@ -546,13 +554,16 @@ class Model(nn.Module):
 
             chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_mask).float()).sum(1)
 
+            costs = all_rewards.sum(-1)
+
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
                                                decoded_srcs[:3],
                                                -sample_nll[:3].sum(1),
-                                               new_rewards[:3]):
+                                               new_rewards[:3],
+                                                          costs[:3]):
                 logger.info("\tSrc: {}".format(src))
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
@@ -560,6 +571,7 @@ class Model(nn.Module):
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tLCS {}".format([(h, m) for h, m in zip(hyp, mark)]))
+                logger.info("\tCost {}".format(cost))
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "lcs-all":
@@ -625,32 +637,26 @@ class Model(nn.Module):
 
             chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_mask).float()).sum(1)
 
+            costs = all_rewards.sum(-1)
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark in zip(hyps_decoded_list[:3],
+            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
                                                refs_np_decoded_list[:3],
                                                 decoded_srcs[:3],
                                                -sample_nll[:3].sum(1),
-                                               new_rewards[:3]):
+                                               new_rewards[:3],
+                                                            costs[:3]):
                 logger.info("\tSrc: {}".format(src))
                 logger.info(
                     "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
                                                         logprob))
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
-                    "\tLCS-ALL{}".format([(h, m) for h, m in zip(hyp, mark)]))
+                    "\tLCS-ALL: {}".format([(h, m) for h, m in zip(hyp, mark)]))
+                logger.info("\tCost: {}".format(cost))
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         else:
-            # post-process for BPE
-            if level == "bpe":
-                # merge byte pairs
-                hyps_decoded = [t.replace("@@ ", "") for t in hyps_decoded]
-                refs_np_decoded = [t.replace("@@ ", "") for t in
-                                   refs_np_decoded]
-                hyps_decoded_list = [t.split(" ") for t in hyps_decoded]
-                refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
-
             # use same reward for all the tokens
             if chunk_type == "sbleu":
                 assert len(refs_np_decoded) == len(hyps_decoded)
@@ -669,13 +675,20 @@ class Model(nn.Module):
                 sters = np.array(ster(hyps_decoded_list, refs_np_decoded_list, case_sensitive=case_sensitive))
                 rewards = 1-sters
 
+            # TODO or constant cost?
+            # TODO make this more sophisticated
+            # cost is length of hyp
+            costs = [len(h) for h in hyps_decoded]
+            # print("COSTS", costs)
+
             if logger is not None:
                 logger.info("Examples from weak supervision:")
-                for hyp, ref, src, logprob, r in zip(hyps_decoded[:3],
+                for hyp, ref, src, logprob, r, cost in zip(hyps_decoded[:3],
                                                 refs_np_decoded[:3],
                                                 decoded_srcs[:3],
                                                 -sample_nll[:3].sum(1),
-                                                rewards[:3]):
+                                                rewards[:3],
+                                                costs[:3]):
                     logger.info("\tSrc: {}".format(src))
                     logger.info(
                         "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
@@ -685,6 +698,7 @@ class Model(nn.Module):
                         "\tReward: {:.3f} {} (BL: {:.3f})".format(r, chunk_type,
                                                                   np.mean(
                                                                       self.rewards)))
+                    logger.info("\tCost: {}".format(cost))
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
@@ -699,26 +713,27 @@ class Model(nn.Module):
             # make update with baselined rewards
             chunk_loss = sample_nll.sum(1) * src_mask.new(new_rewards).float()
 
+
         # compute cost
         # word-based -> need to decode
         # how many words occur do not occur in the ref? = #markings
         # ratio: #markings/hyp_len
         # or rather absolute?
         # maybe add 1 as constant since "accept" if not any error
-        costs = []
+        #costs = []
         #print("refs", refs_np_decoded)
         #print("hyps", hyps_decoded)
         # TODO doesn't really work for sentence-level markings
         # now: max(1, min(neg_markings, pos_markings))
-        for ref_decoded, hyp_decoded in zip(refs_np_decoded, hyps_decoded):
-            missing = 0
-            not_missing = 0
-            for hyp_token in hyp_decoded.split(" "):
-                if hyp_token not in ref_decoded.split(" "):
-                    missing += 1
-                else:
-                    not_missing += 1
-            costs.append(max(1, min(missing, not_missing)))
+       # for ref_decoded, hyp_decoded in zip(refs_np_decoded, hyps_decoded):
+       #     missing = 0
+       #     not_missing = 0
+       #     for hyp_token in hyp_decoded.split(" "):
+       #         if hyp_token not in ref_decoded.split(" "):
+       #             missing += 1
+       #         else:
+       #             not_missing += 1
+      #      costs.append(max(1, min(missing, not_missing)))
         #print(costs)
 
         # other way around: how many words occur in ref?
@@ -792,6 +807,7 @@ class Model(nn.Module):
                               zip(decoded_hyps, decoded_refs)]
         costs = chr_edit_distances
 
+        # TODO problematic: character edits -> might not be found in vocab
         if pe_ratio < 1.0:
             logger.info("PE ratio {}".format(1.0))
             s = SequenceMatcher(lambda x: x in whitespace, autojunk=False)
