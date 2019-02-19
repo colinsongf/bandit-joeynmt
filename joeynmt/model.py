@@ -799,6 +799,7 @@ class Model(nn.Module):
             post_edits = []
             for h, r in zip(decoded_hyps, decoded_refs):
                 logger.info("hyp: {}".format(h))
+                logger.info("ref: {}".format(r))
                 #print("ref", r)
                 #s.set_seq1(r)
                 #s.set_seq2(h)
