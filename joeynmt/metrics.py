@@ -28,11 +28,18 @@ def ter(hypotheses, references, case_sensitive=True):
     :return:
     """
     assert len(hypotheses) == len(references)
-    if not case_sensitive:
-        hypotheses = [h.lower() for h in hypotheses]
-        references = [r.lower for r in references]
-    ters = ster(hypotheses, references)
-    return sum(ters)/len(ters)  # if len(ters) > 0 else sum(ters))
+    total_edits = 0
+    total_ref_tokens = 0
+    for h, r in zip(hypotheses, references):
+        if not case_sensitive:
+            h = h.lower()
+            r = r.lower()
+        edit_dist = pyter.edit_distance(h, r)
+        total_edits += edit_dist
+        total_ref_tokens += len(r)
+    #ters = ster(hypotheses, references)
+    # like in tercom tool: normalize by total number of tokens in references
+    return total_edits/total_ref_tokens
 
 
 def ster(hypotheses, references, case_sensitive=True):
