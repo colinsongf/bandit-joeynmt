@@ -3,16 +3,28 @@ import sys
 import numpy as np
 
 if __name__ == "__main__":
+    lowercase = False
+    if "lc" in sys.argv:
+        lowercase = True
+
     refs = []
     with open(sys.argv[1], "r") as ref:
         for line in ref:
-            refs.append(line.strip().split())
+            ref = line.strip()
+            if lowercase:
+                ref = ref.lower()
+            refs.append(ref.split())
+
     hyps = []
     for line in sys.stdin:
-        hyps.append(line.strip().split())
+        hyp = line.strip()
+        if lowercase:
+            hyp = hyp.lower()
+        hyps.append(hyp.split())
 
     assert len(refs) == len(hyps)
     print("Scoring {} refs/hyps with PyTER.".format(len(refs)))
+    print("Lowercasing: {}".format(lowercase))
 
     ters = []
     total_edits = 0
