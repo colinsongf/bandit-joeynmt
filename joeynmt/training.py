@@ -887,24 +887,37 @@ class TrainManager:
         #    #print("cost with budget", budgeted_costs)
         #else:
         #    budgeted_costs = costs
-        #print("nll", nll)
+        self.logger.debug("nll: {}".format(nll))
         #print("logprob", regulator_log_probs)
         # introduce parameter for interpolation
         #trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
         # TODO different combination?
         # TODO check signs are correct
-        self.logger.debug("COST: {}, REWARD: {}".format(costs, reward))
-        self.logger.debug("PREDS: {}".format(regulator_pred))
-        trade_off = reward - self.cost_weight*costs
+        self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
+        self.logger.info("PREDS: {}".format(regulator_pred))
+        #trade_off = reward - self.cost_weight*costs
         #trade_off = reward / (costs+1)
-        self.logger.debug("trade_off: {}".format(trade_off))
+        #self.logger.debug("trade_off: {}".format(trade_off))
+        #if self.baseline and len(self.rewards) > 0:
+        #    self.logger.debug("MEAN BASELINE: {}".format(np.mean(self.rewards)))
+        #    trade_off = trade_off - trade_off.new([np.mean(self.rewards)])
+        #    self.logger.debug("trade_off-BL: {}".format(trade_off))
         if self.baseline and len(self.rewards) > 0:
-            self.logger.debug("MEAN BASELINE: {}".format(np.mean(self.rewards)))
-            trade_off = trade_off - trade_off.new([np.mean(self.rewards)])
-            self.logger.debug("trade_off-BL: {}".format(trade_off))
-        self.rewards.append(trade_off.cpu().numpy().mean())
-
-        reg_loss = -torch.mul(nll, regulator_log_probs.new(trade_off).to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
+             self.logger.info("MEAN BASELINE: {}".format(np.mean(self.rewards)))
+             reward = reward - np.mean(self.rewards)
+        self.logger.debug("reward-BL: {}".format(reward))
+        trade_off = costs.new([reward*100]) / (costs+1)
+        self.logger.debug("trade_off: {}".format(trade_off))
+        # baseline does not include cost
+        self.rewards.append(reward)
+        self.logger.info(nll)
+        self.logger.info(trade_off)
+        self.logger.info(trade_off.cuda())
+        self.logger.info(trade_off.cuda().detach())
+#        #self.logger.info(costs.new(trade_off).to(regulator_log_probs.device).cuda().detach())
+        self.logger.info(costs.new(trade_off))
+        self.logger.info(costs.new(trade_off).to(regulator_log_probs.device))
+        reg_loss = -torch.mul(nll, trade_off.cuda()) #costs.new(trade_off).to(regulator_log_probs.device).cuda().detach()) #regulator_log_probs.new(trade_off)) .to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
         #print("loss", reg_loss) # batch_size
 
         entropy = 0
