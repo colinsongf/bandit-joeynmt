@@ -14,8 +14,10 @@ from joeynmt.search import beam_search, greedy, sample
 from joeynmt.vocabulary import Vocabulary
 from torch.distributions import Categorical
 from joeynmt.metrics import sbleu, ster, sgleu
-from joeynmt.helpers import arrays_to_sentences
+from joeynmt.helpers import arrays_to_sentences, sentences_to_arrays
 import pyter
+from difflib import SequenceMatcher
+from string import whitespace
 
 
 def build_model(cfg: dict = None,
@@ -699,23 +701,31 @@ class Model(nn.Module):
 
         # compute cost
         # word-based -> need to decode
-        # how many words occur do not occur in the hyp? = #markings
+        # how many words occur do not occur in the ref? = #markings
         # ratio: #markings/hyp_len
         # or rather absolute?
-        # TODO maybe add 1 as constant since "accept" if not any error
+        # maybe add 1 as constant since "accept" if not any error
         costs = []
         #print("refs", refs_np_decoded)
         #print("hyps", hyps_decoded)
+        # TODO doesn't really work for sentence-level markings
+        # now: max(1, min(neg_markings, pos_markings))
         for ref_decoded, hyp_decoded in zip(refs_np_decoded, hyps_decoded):
-            cost_hyp = 0
+            missing = 0
+            not_missing = 0
             for hyp_token in hyp_decoded.split(" "):
                 if hyp_token not in ref_decoded.split(" "):
-                    cost_hyp += 1
+                    missing += 1
                 else:
-                    continue
-            #print("pair + cost:", ref_decoded,"---", hyp_decoded, "---", cost_hyp)
-            costs.append(cost_hyp)
+                    not_missing += 1
+            costs.append(max(1, min(missing, not_missing)))
         #print(costs)
+
+        # other way around: how many words occur in ref?
+        # or: how many got a reward of 1?
+        # or min(#1s, #0s)
+        # how many were selected?
+
         assert len(costs) == selected_batch_size
         selected_tokens = sample_hyp.size
 
@@ -725,9 +735,9 @@ class Model(nn.Module):
     def _full_sup_loss(self, selection, decoder_out, criterion, target,
                        batch_src_mask, max_output_length, encoder_hidden,
                        encoder_out, level,
-                       beam_size=10, beam_alpha=1.0, logger=None):
+                       beam_size=10, beam_alpha=1.0, logger=None, pe_ratio=1.0):
         """
-        Compute the loss for fully-supervised training for the given selection
+        Compute the loss for fully-supervised training for the given, selection
         of indices of the batch
 
         loss: -log_p(reference | x)
@@ -778,9 +788,117 @@ class Model(nn.Module):
         decoded_hyp_list = [t.split(" ") for t in decoded_hyps]
 
         # compute cost: character edit distance? = number of characters to type
-        chr_edit_distances = [pyter.edit_distance(list(h), list(r)) for h, r in zip(decoded_hyps, decoded_refs)]
+        chr_edit_distances = [pyter.edit_distance(list(h), list(r)) for h, r in
+                              zip(decoded_hyps, decoded_refs)]
         costs = chr_edit_distances
-        #print(chr_edit_distances)
+
+        if pe_ratio < 1.0:
+            logger.info("PE ratio {}".format(1.0))
+            s = SequenceMatcher(lambda x: x in whitespace, autojunk=False)
+            costs = []
+            post_edits = []
+            for h, r in zip(decoded_hyps, decoded_refs):
+                logger.info("hyp: {}".format(h))
+                #print("ref", r)
+                #s.set_seq1(r)
+                #s.set_seq2(h)
+                #print(s.get_opcodes())
+                #print([g for g in s.get_grouped_opcodes()])
+                def edit(a, b, ratio=0.5):
+                    # ratio: ratio of edit operations to perform (of those needed to reach reference)
+                    i = 0
+                    j = 0
+                    cost = 0 # number of characters touched
+                    s.set_seq1(a)
+                    s.set_seq2(b)
+                    codes = s.get_opcodes()
+                    n = len([c[0] for c in codes if c[0] != "equal" ])*ratio
+                    while i < n and j < len(codes):
+                        #print("a", a)
+                        #print("b", b)
+                        #print("code", codes[j])
+                        to_execute = codes[j]
+                        if to_execute[0] == "equal":
+                            j += 1
+                            continue
+                        elif to_execute[0] == "replace":
+                            #print(a[to_execute[1]:to_execute[2]])
+                            #print(b[to_execute[3]:to_execute[4]])
+                            a = a[:to_execute[1]] + b[to_execute[3]:to_execute[4]] + a[to_execute[2]:]
+                            #print("after replacement", a)
+                            #print("replace cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
+                            cost += max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            i += 1
+                            s.set_seq1(a)
+                            codes = s.get_opcodes()
+                        elif to_execute[0] == "insert":
+                            #print(a[to_execute[1]:to_execute[2]])
+                            #print(b[to_execute[3]:to_execute[4]])
+                            a = a[:to_execute[2]] + b[to_execute[3]:to_execute[4]] + a[to_execute[2]:]
+                            #print("a after insertion", a)
+                            #print("insert cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
+                            cost += max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            i += 1
+                            s.set_seq1(a)
+                            codes = s.get_opcodes()
+                        elif to_execute[0] == "delete":
+                            #print(a[to_execute[1]:to_execute[2]])
+                            #print(b[to_execute[3]:to_execute[4]])
+                            a = a[:to_execute[1]] + a[to_execute[2]:]
+                            #print("after deletion", a)
+                            #print("delete cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
+                            cost += max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            i += 1
+                            s.set_seq1(a)
+                            codes = s.get_opcodes()
+                    return a, cost
+
+                post_edited_h, edit_cost = edit(h, r, ratio=0.6)
+                logger.info("PE: {}".format(post_edited_h))
+                logger.info("PE cost {}".format(edit_cost))
+                post_edits.append(post_edited_h)
+                costs.append(edit_cost)
+
+
+            #print("edit distances", chr_edit_distances, sum(chr_edit_distances))
+
+            #pe_edit_distances = [pyter.edit_distance(list(p), list(r)) for p, r in zip(post_edits, decoded_refs)]
+            #print("after pe", pe_edit_distances, sum(pe_edit_distances))
+
+            # now represent as indices
+            pe_indices = sentences_to_arrays([p.split(" ") for p in post_edits], vocabulary=self.trg_vocab, pad_index=self.pad_index, max_length=selected_target.shape[1])
+                                             #max_length=max_output_length)
+
+            # add BOS
+            bos_array = np.full(shape=(selected_batch_size, 1),
+                                fill_value=self.bos_index)
+            # prepend bos but cut off one bos
+            pe_pad_bos = np.concatenate((bos_array, pe_indices),
+                                                axis=1)[:, :-1]
+
+            #print("PE INPUT", pe_pad_bos)
+            #print("PE TRG", pe_indices)
+            # teacher-force with PE now
+            pe_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
+                                              encoder_hidden=selected_encoder_hidden,
+                                              trg_input=selected_src_mask.new(
+                                                  pe_pad_bos).long(),
+                                              src_mask=selected_src_mask,
+                                              unrol_steps=pe_pad_bos.shape[
+                                                  1])
+
+            pe_log_probs = F.log_softmax(pe_out, dim=-1)
+
+            # TODO what happens with BPEs?
+            #print(arrays_to_sentences(pe_indices, vocabulary=self.trg_vocab, cut_at_eos=False))
+            pe_sup_loss = criterion(
+                input=pe_log_probs.contiguous().view(-1, pe_log_probs.size(-1)),
+                target=tf_log_probs.new(pe_indices).long().contiguous().view(-1)).view(
+                selected_batch_size, -1).sum(-1)
+            full_sup_loss = pe_sup_loss
+        #print("PE loss", pe_sup_loss)
+        #print("full sup loss", full_sup_loss)
+
 
         # compute cost: TER*ref_len -> absolute number of edits
         #print("decoded_hyp", decoded_hyp)
@@ -792,11 +910,13 @@ class Model(nn.Module):
         #print("#edits", costs)
         assert full_sup_loss.size(0) == selected_batch_size
         return full_sup_loss.sum(), selected_tokens, selected_batch_size, costs
+        #return pe_sup_loss.sum(), selected_tokens, selected_batch_size, costs
 
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
                            max_output_length=100, chunk_type="marking", level="word",
                            entropy=False, weak_search="sample", weak_baseline=True,
-                           weak_temperature=1.0, logger=None, case_sensitive=True):
+                           weak_temperature=1.0, logger=None, case_sensitive=True,
+                           pe_ratio=1.0):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -908,7 +1028,7 @@ class Model(nn.Module):
                     criterion=criterion, target=batch.trg,
                     encoder_hidden=encoder_hidden, level=level,
                     encoder_out=encoder_out, max_output_length=max_output_length,
-                    batch_src_mask=batch.src_mask, logger=logger)
+                    batch_src_mask=batch.src_mask, logger=logger, pe_ratio=pe_ratio)
                # print("full sup selected", full_sup_loss_selected)
                 batch_loss += full_sup_loss_selected
                 batch_tokens += tokens
