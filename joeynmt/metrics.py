@@ -29,11 +29,16 @@ def ter(hypotheses, references, case_sensitive=True):
     :return:
     """
     assert len(hypotheses) == len(references)
-    if not case_sensitive:
-        hypotheses = [[hi.lower() for hi in h] for h in hypotheses]
-        references = [[ri.lower() for ri in r] for r in references]
-    ters = ster(hypotheses, references)
-    return np.mean(ters)  # if len(ters) > 0 else sum(ters))
+    total_edit_dist = 0
+    total_ref_tokens = 0
+    for h, r in zip(hypotheses, references):
+        if not case_sensitive:
+            h = [hi.lower() for hi in h]
+            r = [ri.lower() for ri in r]
+        edit_dist = pyter.edit_distance(h, r)
+        total_edit_dist += edit_dist
+        total_ref_tokens += len(r)
+    return total_edit_dist/total_ref_tokens  # if len(ters) > 0 else sum(ters))
 
 
 def ster(hypotheses, references, case_sensitive=True):
