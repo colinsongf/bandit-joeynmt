@@ -6,7 +6,7 @@ import os
 import numpy as np
 import shutil
 from collections import OrderedDict
-
+import random
 
 import torch
 import torch.nn as nn
@@ -1068,6 +1068,7 @@ def train(cfg_file):
     seed = cfg["training"].get("random_seed", 42)
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
 
     # load the data
     train_data, dev_data, test_data, src_vocab, trg_vocab = \
