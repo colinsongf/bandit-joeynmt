@@ -97,6 +97,7 @@ model:
         hidden_size: 63
         middle_size: 31
         dropout: 0.1
-        output_size: 4
+        output_labels: ["weak", "full"]
+        #["none", "self", "weak", "full"]
         num_layers: 2
         bidirectional: True

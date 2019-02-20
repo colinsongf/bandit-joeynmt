@@ -29,7 +29,7 @@ class RecurrentRegulator(Regulator):
     # TODO use only src
     # TODO use max pool to make interpretable?
     def __init__(self,
-                 output_size,
+                 output_labels,
                  type,
                  hidden_size,
                  middle_size,
@@ -39,8 +39,13 @@ class RecurrentRegulator(Regulator):
                  bidirectional,
                  dropout,
                  **kwargs):
+        # mapping output indices to labels
+        self.index2label = dict(enumerate(output_labels))
+        # mapping labels to output indices
+        self.label2index = {v: k for (k,v) in self.index2label.items()}
+        self.output_size = len(output_labels)
         super(RecurrentRegulator, self).__init__(
-            output_size, src_emb_size)#, trg_emb_size)
+            self.output_size, src_emb_size)#, trg_emb_size)
 
         rnn = nn.GRU if type == "gru" else nn.LSTM
 
@@ -63,7 +68,7 @@ class RecurrentRegulator(Regulator):
             in_features=self.middle_layer.out_features,
             #self.src_rnn.hidden_size*(2 if bidirectional else 1),
                       #  self.trg_rnn.hidden_size*(2 if bidirectional else 1),
-            out_features=output_size
+            out_features=self.output_size
         )
 
     def forward(self, src, src_length): #, hyp):

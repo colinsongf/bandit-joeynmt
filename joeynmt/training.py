@@ -51,6 +51,7 @@ class TrainManager:
         weight_decay = train_config.get("weight_decay", 0)
 
         if model.regulator is not None:
+            self.logger.info("Regulator output labels: {}".format(self.model.regulator.index2label))
             self.init_from_mt = train_config.get("init_from_mt", False)
             # 2 sets of parameters -> 2 optimizers
             # see https://stackoverflow.com/questions/51578235/pytorch-how-to-get-the-gradient-of-loss-function-twice

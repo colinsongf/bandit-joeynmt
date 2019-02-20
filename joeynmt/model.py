@@ -972,7 +972,8 @@ class Model(nn.Module):
             if pred is not False:
                 if pred == "random":
                     # random choice
-                    fill_value = np.random.randint(0, 4, size=batch_size)
+                    fill_value = np.random.randint(0, self.regulator.output_size,
+                                                   size=batch_size)
                 else:
                     fill_value = pred
                 reg_pred = torch.from_numpy(
@@ -986,9 +987,14 @@ class Model(nn.Module):
             batch_costs = regulator_out.new_zeros(batch_size)
 
             # split up the batch and sum the individual losses
-            if 0 in reg_pred:
+            none_index = self.regulator.label2index.get("none", -1)
+            self_index = self.regulator.label2index.get("self", -1)
+            weak_index = self.regulator.label2index.get("weak", -1)
+            full_index = self.regulator.label2index.get("full", -1)
+
+            if none_index in reg_pred:
                 # skip those: no loss
-                zeros = torch.eq(reg_pred, 0)
+                zeros = torch.eq(reg_pred, none_index)
                 zeros_idx = zeros.nonzero().squeeze(1)
                 selected_srcs = torch.index_select(batch.src, dim=0,
                                                    index=zeros_idx)
@@ -1001,8 +1007,8 @@ class Model(nn.Module):
                 for src in decoded_srcs[:3]:
                     logger.info("\tSkipping {}".format(src))
                 # no cost
-            if 1 in reg_pred:
-                ones = torch.eq(reg_pred, 1)
+            if self_index in reg_pred:
+                ones = torch.eq(reg_pred, self_index)
                 ones_idx = ones.nonzero().squeeze(1)
                 # compute self-train loss for those (smaller batch)
                 self_sup_loss_selected, tokens, seqs = self._self_sup_loss(
@@ -1017,9 +1023,9 @@ class Model(nn.Module):
                 batch_seqs += seqs
                 # no cost
 
-            if 2 in reg_pred:
+            if weak_index in reg_pred:
                 # compute weak-sup. loss for those
-                twos = torch.eq(reg_pred, 2)
+                twos = torch.eq(reg_pred, weak_index)
                 twos_idx = twos.nonzero().squeeze(1)
                 weak_sup_loss_selected, tokens, seqs, costs = self._weak_sup_loss(
                     selection=twos_idx, src=batch.src, encoder_out=encoder_out,
@@ -1037,9 +1043,9 @@ class Model(nn.Module):
                 # write at the right position of cost vector
                 batch_costs[twos_idx] = batch_costs.new(costs)
 
-            if 3 in reg_pred:
+            if full_index in reg_pred:
                 # compute fully-sup. loss for those
-                threes = torch.eq(reg_pred, 3)
+                threes = torch.eq(reg_pred, full_index)
                 threes_idx = threes.nonzero().squeeze(1)
                 full_sup_loss_selected, tokens, seqs, costs = self._full_sup_loss(
                     selection=threes_idx, decoder_out=out,
