@@ -933,7 +933,7 @@ class Model(nn.Module):
                            max_output_length=100, chunk_type="marking", level="word",
                            entropy=False, weak_search="sample", weak_baseline=True,
                            weak_temperature=1.0, logger=None, case_sensitive=True,
-                           pe_ratio=1.0):
+                           pe_ratio=1.0, beam_size=10, beam_alpha=1.):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -1009,7 +1009,8 @@ class Model(nn.Module):
                     selection=ones_idx, encoder_out=encoder_out, entropy=entropy,
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
                     max_output_length=max_output_length, criterion=criterion,
-                    logger=logger, target=batch.trg, level=level)
+                    logger=logger, target=batch.trg, level=level,
+                    beam_size=beam_size, beam_alpha=beam_alpha)
                 #print("self sup selected", self_sup_loss_selected)
                 batch_loss += self_sup_loss_selected.sum()
                 batch_tokens += tokens
@@ -1026,7 +1027,7 @@ class Model(nn.Module):
                     max_output_length=max_output_length, criterion=criterion,
                     chunk_type=chunk_type, level=level,
                     target=batch.trg, weak_temperature=weak_temperature,
-                    weak_search=weak_search,
+                    weak_search=weak_search, beam_size=beam_size, beam_alpha=beam_alpha,
                     weak_baseline=weak_baseline, logger=logger, case_sensitive=case_sensitive)
                 #print("weak sup selected", weak_sup_loss_selected)
                 batch_loss += weak_sup_loss_selected.sum()
@@ -1044,6 +1045,7 @@ class Model(nn.Module):
                     selection=threes_idx, decoder_out=out,
                     criterion=criterion, target=batch.trg,
                     encoder_hidden=encoder_hidden, level=level,
+                    beam_size=beam_size, beam_alpha=beam_alpha,
                     encoder_out=encoder_out, max_output_length=max_output_length,
                     batch_src_mask=batch.src_mask, logger=logger, pe_ratio=pe_ratio)
                # print("full sup selected", full_sup_loss_selected)

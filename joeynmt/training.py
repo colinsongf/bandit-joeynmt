@@ -32,6 +32,9 @@ class TrainManager:
         :param config:
         """
         train_config = config["training"]
+        test_config = config["testing"]
+        self.beam_size = test_config.get("beam_size", 5)
+        self.beam_alpha = test_config.get("beam_alpha", 1.0)
         self.model = model
         self.overwrite = train_config.get("overwrite", False)
         self.model_dir = self._make_model_dir(train_config["model_dir"])
@@ -259,6 +262,7 @@ class TrainManager:
         self.logger.info("Using case sensitive weak feedback? {}".format(self.weak_case_sensitive))
         self.pe_ratio = train_config.get("pe_ratio", 1.0)
         self.logger.info("Using PEs with ratio {}".format(self.pe_ratio))
+        self.logger.info("Decoding with beam size={} and alpha={} for feedback.".format(self.beam_size, self.beam_alpha))
 
     def save_checkpoint(self):
         """
@@ -807,7 +811,9 @@ class TrainManager:
                         weak_temperature=self.weak_temperature,
                         logger=self.logger,
                         case_sensitive=self.weak_case_sensitive,
-                        pe_ratio=self.pe_ratio)
+                        pe_ratio=self.pe_ratio,
+                        beam_size=self.beam_size,
+                        beam_alpha=self.beam_alpha)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
