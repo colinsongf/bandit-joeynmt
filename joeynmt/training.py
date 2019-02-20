@@ -798,7 +798,8 @@ class TrainManager:
         :return:
         """
         # only run regulator if its loss is > 0
-        batch_loss, regulator_out, regulator_pred, batch_tokens, batch_seqs, \
+
+        batch_loss, regulator_log_probs, regulator_pred, batch_tokens, batch_seqs, \
             batch_costs = self.model.get_loss_for_batch(
                         batch=batch, criterion=self.criterion,
                         regulate=self.loss_weights["regulator"] > 0 and
@@ -818,7 +819,7 @@ class TrainManager:
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
-            return None, regulator_out, regulator_pred, regulator_pred.new(regulator_pred.size()).zero_().float()
+            return None, regulator_log_probs, regulator_pred, regulator_pred.new(regulator_pred.size()).zero_().float()
 
         # normalize batch loss
         # counts might be adapted since parts of batch are ignored through reg. choice
@@ -875,16 +876,18 @@ class TrainManager:
         # increment token counter
         self.total_tokens += batch.ntokens
 
-        return norm_batch_loss, regulator_out, regulator_pred, batch_costs
+        return norm_batch_loss, regulator_log_probs, regulator_pred, batch_costs
 
     def _train_batch_regulator(self, regulator_log_probs, regulator_pred, reward, costs, update=True):
         # regulator_log_prob*(reward-cost)
         # compute cost
        # costs = self.model.regulator.get_costs(regulator_pred.detach().cpu().numpy(), hyps=, refs=)
         # select correct part of log probs with nll
-        #print("reg log prob", regulator_log_probs)
+        #print("reg log prob", regulator_log_probs.shape)
+        #print("regulator pred", regulator_pred.shape)
         # TODO include cost in basleine?
-        nll = self.criterion(input=regulator_log_probs.view(regulator_pred.size(0), -1), target=regulator_pred)
+        # .view(regulator_pred.size(0), -1)
+        nll = self.criterion(input=regulator_log_probs, target=regulator_pred.detach())
         #print("costs", costs)  # batch_size
         #print(self.budget)
         #budget_used = 1-(self.budget/max(self.initial_budget, 1))
@@ -927,7 +930,7 @@ class TrainManager:
 #        #self.logger.info(costs.new(trade_off).to(regulator_log_probs.device).cuda().detach())
         #self.logger.info(costs.new(trade_off))
         #self.logger.info(costs.new(trade_off).to(regulator_log_probs.device))
-        reg_loss = -torch.mul(nll, costs.new(trade_off)) #costs.new(trade_off).to(regulator_log_probs.device).cuda().detach()) #regulator_log_probs.new(trade_off)) .to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
+        reg_loss = torch.mul(nll, costs.new(trade_off)) #costs.new(trade_off).to(regulator_log_probs.device).cuda().detach()) #regulator_log_probs.new(trade_off)) .to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
         #print("loss", reg_loss) # batch_size
 
         entropy = 0
@@ -935,7 +938,7 @@ class TrainManager:
             entropy = -torch.mul(torch.exp(regulator_log_probs),
                                  regulator_log_probs).sum(1)  # batch_size
            # print("entropy", entropy)
-            reg_loss -= self.entropy_regularizer*entropy
+            reg_loss += self.entropy_regularizer*entropy
             entropy = entropy.sum()
 
         # average over batch
