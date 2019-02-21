@@ -540,8 +540,10 @@ class TrainManager:
                 update = count == 0
 
                 # print(count, update, self.steps)
+                if self.only_sup is not False:
+                    only_sup = self.model.regulator.label2index[self.only_sup]
                 batch_loss, reg_log_probs, reg_pred, costs = \
-                    self._train_batch_mt(batch, update=update, pred=self.only_sup)
+                    self._train_batch_mt(batch, update=update, pred=only_sup)
                 all_reg_log_probs.append(reg_log_probs)
                 all_reg_preds.append(reg_pred)
                 batch_costs.append(costs)

@@ -55,7 +55,7 @@ training:
     budget: 5000
     cost_weight: 0.9
     budgeted_cost: False
-    only_sup: 1
+    only_sup: "full"
     chunk_type: "sbleu"  # marking
     self_entropy: False # encourage high entropy for self-training
     weak_baseline: True
