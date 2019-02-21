@@ -148,7 +148,7 @@ class Model(nn.Module):
         return self.encoder(self.src_embed(src), src_length, src_mask)
 
     def decode(self, encoder_output, encoder_hidden, src_mask, trg_input,
-               unrol_steps, decoder_hidden=None):
+               unrol_steps, decoder_hidden=None, attention_drop=0.0):
         """
         Decode, given an encoded source sentence.
         # TODO adapt to transformer
@@ -166,7 +166,8 @@ class Model(nn.Module):
                             encoder_hidden=encoder_hidden,
                             src_mask=src_mask,
                             unrol_steps=unrol_steps,
-                            hidden=decoder_hidden)
+                            hidden=decoder_hidden,
+                            attention_drop=attention_drop)
 
     def regulate(self, src, src_length): #, hyp):
         """
@@ -183,7 +184,7 @@ class Model(nn.Module):
     # then sum loss
     # -> still mini-batching, but smaller
 
-    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, criterion, target, level, beam_size=10, beam_alpha=1.0, entropy=False, logger=None):
+    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, criterion, target, level, beam_size=10, beam_alpha=1.0, entropy=False, logger=None, attention_drop=0.0):
         """
         Compute the loss for self-supervised training for the given selection
         of indices of the batch
@@ -233,7 +234,8 @@ class Model(nn.Module):
                                            trg_input=src_mask.new(
                                                bs_hyp_pad_bos).long(),
                                            src_mask=selected_src_mask,
-                                           unrol_steps=bs_hyp_pad_bos.shape[1])
+                                           unrol_steps=bs_hyp_pad_bos.shape[1],
+                                      attention_drop=attention_drop)
         bs_log_probs = F.log_softmax(bs_out, dim=-1)
         # greedy_log_prob = self.force_decode(encoder_output=encoder_out,
         #                                 encoder_hidden=encoder_hidden,
@@ -933,7 +935,8 @@ class Model(nn.Module):
                            max_output_length=100, chunk_type="marking", level="word",
                            entropy=False, weak_search="sample", weak_baseline=True,
                            weak_temperature=1.0, logger=None, case_sensitive=True,
-                           pe_ratio=1.0, beam_size=10, beam_alpha=1.):
+                           pe_ratio=1.0, beam_size=10, beam_alpha=1.,
+                           self_attention_drop=0.0):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -1016,7 +1019,8 @@ class Model(nn.Module):
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
                     max_output_length=max_output_length, criterion=criterion,
                     logger=logger, target=batch.trg, level=level,
-                    beam_size=beam_size, beam_alpha=beam_alpha)
+                    beam_size=beam_size, beam_alpha=beam_alpha,
+                    attention_drop=self_attention_drop)
                 #print("self sup selected", self_sup_loss_selected)
                 batch_loss += self_sup_loss_selected.sum()
                 batch_tokens += tokens

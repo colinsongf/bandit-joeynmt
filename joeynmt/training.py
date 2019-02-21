@@ -265,6 +265,8 @@ class TrainManager:
         self.logger.info("Using PEs with ratio {}".format(self.pe_ratio))
         self.logger.info("Decoding with beam size={} and alpha={} for feedback.".format(self.beam_size, self.beam_alpha))
         self.logger.info("Regulator baseline {}".format(self.baseline))
+        self.attention_drop = train_config.get("self_attention_drop", 0.0)
+        self.logger.info("Attention drop for self-training: p={}".format(self.attention_drop))
 
     def save_checkpoint(self):
         """
@@ -816,7 +818,8 @@ class TrainManager:
                         case_sensitive=self.weak_case_sensitive,
                         pe_ratio=self.pe_ratio,
                         beam_size=self.beam_size,
-                        beam_alpha=self.beam_alpha)
+                        beam_alpha=self.beam_alpha,
+                        self_attention_drop=self.attention_drop)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost

@@ -157,7 +157,8 @@ class RecurrentDecoder(Decoder):
         return att_vector, hidden, att_probs
 
     def forward(self, trg_embed, encoder_output, encoder_hidden,
-                src_mask, unrol_steps, hidden=None, prev_att_vector=None):
+                src_mask, unrol_steps, hidden=None, prev_att_vector=None,
+                attention_drop=0.0):
         """
          Unroll the decoder one step at a time for `unrol_steps` steps.
 
@@ -194,6 +195,10 @@ class RecurrentDecoder(Decoder):
 
         # unroll the decoder RN N for max_len steps
         for i in range(unrol_steps):
+            if attention_drop > 0.0:
+                drop = torch.nn.Dropout(p=attention_drop)
+                prev_att_vector = drop(prev_att_vector)
+
             prev_embed = trg_embed[:, i].unsqueeze(1)  # batch, 1, emb
             prev_att_vector, hidden, att_prob = self._forward_step(
                 prev_embed=prev_embed,
