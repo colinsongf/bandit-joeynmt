@@ -920,6 +920,11 @@ class TrainManager:
              reward -= np.mean(self.rewards)
         self.logger.debug("reward-BL: {}".format(reward))
         trade_off = costs.new([reward*100]) / (costs+1)
+        if self.entropy_regularizer > 0:
+            entropy_penalty = self.entropy_regularizer*-nll - self.entropy_regularizer
+            self.logger.info("entropy penalty {}".format(entropy_penalty))
+            trade_off -= entropy_penalty
+
         self.logger.debug("trade_off: {}".format(trade_off))
         # baseline does not include cost
         #self.rewards.append(reward)
@@ -933,13 +938,14 @@ class TrainManager:
         reg_loss = torch.mul(nll, costs.new(trade_off)) #costs.new(trade_off).to(regulator_log_probs.device).cuda().detach()) #regulator_log_probs.new(trade_off)) .to(regulator_log_probs.device).detach()) #regulator_log_probs.new([reward])
         #print("loss", reg_loss) # batch_size
 
-        entropy = 0
-        if self.entropy_regularizer > 0:
-            entropy = -torch.mul(torch.exp(regulator_log_probs),
+        #entropy = 0
+        #if self.entropy_regularizer > 0:
+        # entropy of all outputs
+        entropy = -torch.mul(torch.exp(regulator_log_probs),
                                  regulator_log_probs).sum(1)  # batch_size
-           # print("entropy", entropy)
-            reg_loss += self.entropy_regularizer*entropy
-            entropy = entropy.sum()
+        #   # print("entropy", entropy)
+        #    reg_loss += self.entropy_regularizer*entropy
+        #    entropy = entropy.sum()
 
         # average over batch
         norm_batch_loss = reg_loss.mean(0)
