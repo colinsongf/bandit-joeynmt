@@ -581,6 +581,10 @@ class TrainManager:
                                     case_sensitive=not self.lowercase)
                         #print("reward", valid_score_immediate)
                         reward = valid_score_immediate/100
+                        #  if ter -> minus - TODO or 1-ter?
+                        if self.eval_metric == "ter":
+                            reward = -reward
+
 
                         total_valid_duration = self.process_validation(
                             epoch_no=epoch_no, valid_hypotheses=None,
