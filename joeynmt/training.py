@@ -264,6 +264,7 @@ class TrainManager:
         self.pe_ratio = train_config.get("pe_ratio", 1.0)
         self.logger.info("Using PEs with ratio {}".format(self.pe_ratio))
         self.logger.info("Decoding with beam size={} and alpha={} for feedback.".format(self.beam_size, self.beam_alpha))
+        self.logger.info("Regulator baseline {}".format(self.baseline))
 
     def save_checkpoint(self):
         """
@@ -903,8 +904,6 @@ class TrainManager:
         #print("logprob", regulator_log_probs)
         # introduce parameter for interpolation
         #trade_off = (1-self.cost_weight)*(1-reward) + self.cost_weight*budgeted_costs
-        # TODO different combination?
-        # TODO check signs are correct
         # improvement in reward per increase in cost -> (r-r_prev) / cost
         self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
         self.logger.info("PREDS: {}".format(regulator_pred))
@@ -915,10 +914,33 @@ class TrainManager:
         #    self.logger.debug("MEAN BASELINE: {}".format(np.mean(self.rewards)))
         #    trade_off = trade_off - trade_off.new([np.mean(self.rewards)])
         #    self.logger.debug("trade_off-BL: {}".format(trade_off))
+
+        # keeping track of rewards (not costs)
+        self.rewards.append(reward)
+
+        self.logger.info("BASELINE {} ({})".format(self.baseline, len(self.rewards)))
         if self.baseline and len(self.rewards) > 0:
-             self.logger.info("MEAN BASELINE: {}".format(np.mean(self.rewards)))
-             reward -= np.mean(self.rewards)
-        self.logger.debug("reward-BL: {}".format(reward))
+            # either mean
+            baseline_reward = 0
+            if self.baseline == "mean":
+                 baseline_reward = np.mean(self.rewards) if len(self.rewards) > 0 else 0
+            # or previous
+            elif self.baseline == "previous":
+                num_previous = len(self.rewards)-1
+                baseline_reward = self.rewards[-2] if num_previous > 0 else 0
+            # first
+            elif self.baseline == "first":
+                baseline_reward = self.rewards[0] if len(self.rewards) > 0 else 0
+            # mean of previous x
+            elif self.baseline == "window":
+                window_size = 5
+                num_previous = len(self.rewards)-1
+                baseline_reward = np.mean(self.rewards[-window_size+1:-1] if num_previous > window_size else 0)
+            else:
+                raise ValueError("Invalid baseline specified.")
+
+            self.logger.info("{} BASELINE: {}".format(self.baseline, np.mean(self.rewards)))
+            reward -= baseline_reward
         trade_off = costs.new([reward*100]) / (costs+1)
         if self.entropy_regularizer > 0:
             entropy_penalty = self.entropy_regularizer*-nll - self.entropy_regularizer
