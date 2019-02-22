@@ -811,8 +811,9 @@ class Model(nn.Module):
 
         # TODO problematic: character edits -> might not be found in vocab
         if pe_ratio < 1.0:
-            logger.info("PE ratio {}".format(1.0))
-            s = SequenceMatcher(lambda x: x in whitespace, autojunk=False)
+            logger.info("PE ratio {}".format(pe_ratio))
+            # white spaces and BPE marker are not considered for edit distance
+            s = SequenceMatcher(lambda x: x in whitespace+"@", autojunk=False)
             costs = []
             post_edits = []
             for h, r in zip(decoded_hyps, decoded_refs):
@@ -843,30 +844,44 @@ class Model(nn.Module):
                         elif to_execute[0] == "replace":
                             #print(a[to_execute[1]:to_execute[2]])
                             #print(b[to_execute[3]:to_execute[4]])
+                            #print("a before replacement", a)
+                            rep_len = len(b[to_execute[3]: to_execute[4]].replace("@", ""))
+                            #print("rep len", rep_len)
                             a = a[:to_execute[1]] + b[to_execute[3]:to_execute[4]] + a[to_execute[2]:]
                             #print("after replacement", a)
                             #print("replace cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
-                            cost += max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            cost += rep_len #max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
                             i += 1
                             s.set_seq1(a)
                             codes = s.get_opcodes()
                         elif to_execute[0] == "insert":
+                            #print("a before insertion", a)
                             #print(a[to_execute[1]:to_execute[2]])
                             #print(b[to_execute[3]:to_execute[4]])
+                            insert_len = len(b[to_execute[3]:to_execute[4]].replace("@", ""))
+                            #print("insert len", insert_len)
                             a = a[:to_execute[2]] + b[to_execute[3]:to_execute[4]] + a[to_execute[2]:]
                             #print("a after insertion", a)
                             #print("insert cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
-                            cost += max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            cost += insert_len #max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
                             i += 1
                             s.set_seq1(a)
                             codes = s.get_opcodes()
                         elif to_execute[0] == "delete":
                             #print(a[to_execute[1]:to_execute[2]])
                             #print(b[to_execute[3]:to_execute[4]])
+                            # deduce the number of @s in the edited sequence to get correct cost
+                            del_len = len(a[to_execute[1]:to_execute[2]].replace("@", ""))
+                            #print("DEL LEN", del_len)
+                            #print("before deletion", a)
                             a = a[:to_execute[1]] + a[to_execute[2]:]
                             #print("after deletion", a)
+                            #print(a[:to_execute[1]])#.replace(" ", ""))
+                            #print(a[:to_execute[2]]) #.replace(" ", ""))
+
                             #print("delete cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
-                            cost += max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+
+                            cost += del_len #max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
                             i += 1
                             s.set_seq1(a)
                             codes = s.get_opcodes()
