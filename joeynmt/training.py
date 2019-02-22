@@ -549,6 +549,8 @@ class TrainManager:
                 all_reg_log_probs.append(reg_log_probs)
                 all_reg_preds.append(reg_pred)
                 batch_costs.append(costs)
+                all_costs = torch.cat(batch_costs, 0)
+                self.total_cost += all_costs.sum()
 
                 if reg_pred is not None:
                     self.regulator_outputs.extend(reg_pred.detach().cpu().numpy())
@@ -628,14 +630,13 @@ class TrainManager:
                         assert len(all_reg_log_probs) == self.batch_multiplier
                         assert len(all_reg_preds) == self.batch_multiplier
                         assert len(batch_costs) == self.batch_multiplier
-                        all_costs = torch.cat(batch_costs, 0)
+
                         reg_batch_loss, entropy = \
                             self._train_batch_regulator(
                                 regulator_log_probs=torch.cat(all_reg_log_probs, 0),
                                 regulator_pred=torch.cat(all_reg_preds, 0),
                                 reward=reward, update=update, costs=all_costs)
                         batch_costs = []
-                        self.total_cost += all_costs.sum()
                         # TODO this is not exact
                         #if self.budget < 0:
                         #    self.stop = True
@@ -655,6 +656,8 @@ class TrainManager:
                 # log learning progress
                 if self.model.training and self.steps % self.logging_freq == 0 \
                         and update:
+                    print("SELF TOTAL COST", self.total_cost)
+
                     elapsed = time.time() - start - total_valid_duration
                     elapsed_tokens = self.total_tokens - processed_tokens
                     self.logger.info(
@@ -665,6 +668,7 @@ class TrainManager:
                             elapsed_tokens / elapsed, self.total_cost))
                     start = time.time()
                     total_valid_duration = 0
+
 
                 # validate on the entire dev set
                 if self.steps % self.validation_freq == 0 and update:
@@ -1064,7 +1068,7 @@ class TrainManager:
 
         if self.loss_weights["regulator"] > 0:
             # add statistics
-            report_str += "\t Avg_Reward: {}".format(np.mean(self.rewards))
+            report_str += "\t Avg_Reward: {}".format(np.mean(self.rewards) if len(self.rewards) > 1 else 0)
             report_str += "\t Total_Cost: {}".format(self.total_cost)
             current_reg_out = self.regulator_outputs[-self.batch_size:]
             total = self.batch_size
