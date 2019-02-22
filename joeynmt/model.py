@@ -992,11 +992,19 @@ class Model(nn.Module):
                     # random choice
                     fill_value = np.random.randint(0, self.regulator.output_size,
                                                    size=batch_size)
+                    reg_pred = torch.from_numpy(
+                        np.full(shape=(batch_size), fill_value=fill_value)).to(
+                        regulator_out.device).long()
+                elif pred == "uniform":
+                    # fixed choice: [0, 1, 2, 3, 0, 1, 2, 3, 4 ... ]
+                    reg_pred = torch.from_numpy(
+                        (np.array([i for i in range(0, self.regulator.output_size)]
+                         *batch_size)[:batch_size])).to(regulator_out.device).long()
                 else:
                     fill_value = pred
-                reg_pred = torch.from_numpy(
-                    np.full(shape=(batch_size), fill_value=fill_value)).to(
-                    regulator_out.device).long()
+                    reg_pred = torch.from_numpy(
+                        np.full(shape=(batch_size), fill_value=fill_value)).to(
+                        regulator_out.device).long()
                 # print("regulator prediction", reg_pred)
 
             batch_loss = 0
