@@ -112,6 +112,8 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
         self.rewards = []
+        self.rewards_per_output = {i: [] for i in self.regulator.index2label.keys()}
+        self.costs_per_output = {i: [] for i in self.regulator.index2label.keys()}
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
@@ -951,7 +953,7 @@ class Model(nn.Module):
                            entropy=False, weak_search="sample", weak_baseline=True,
                            weak_temperature=1.0, logger=None, case_sensitive=True,
                            pe_ratio=1.0, beam_size=10, beam_alpha=1.,
-                           self_attention_drop=0.0):
+                           self_attention_drop=0.0, epsilon=0.5):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -1000,6 +1002,26 @@ class Model(nn.Module):
                     reg_pred = torch.from_numpy(
                         (np.array([i for i in range(0, self.regulator.output_size)]
                          *batch_size)[:batch_size])).to(regulator_out.device).long()
+                elif pred == "epsilon":
+                    # epsilon-greedy
+                    # draw random number between 0 and 1
+                    exploit = np.random.uniform(low=0.0, high=1.0, size=(batch_size)) > epsilon
+                    reg_pred = np.zeros(shape=(batch_size))
+                    # if larger than epsilon: pick best action so far
+                    for k, e in enumerate(exploit):
+                        if e:
+                            #print("REWARD STATS",self.rewards_per_output)
+                            #print("COST STATS", self.costs_per_output)
+                            stats = [np.mean(np.array(self.rewards_per_output[i])-np.array(self.costs_per_output[i])) if len(self.rewards_per_output[i]) > 0 else 0 for i in range(self.regulator.output_size)]
+                            #print("EXPLOIT", stats, np.argmax(stats))
+                            fill_value = np.argmax(stats)
+                        # otherwise: pick one uniformly
+                        else:
+                            #print("EXPLORE")
+                            fill_value = np.random.randint(0, high=self.regulator.output_size)
+                        reg_pred[k] = fill_value
+                    reg_pred = torch.from_numpy(reg_pred).to(
+                        regulator_out.device).long()
                 else:
                     fill_value = pred
                     reg_pred = torch.from_numpy(

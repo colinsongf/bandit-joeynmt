@@ -267,6 +267,8 @@ class TrainManager:
         self.logger.info("Regulator baseline {}".format(self.baseline))
         self.attention_drop = train_config.get("self_attention_drop", 0.0)
         self.logger.info("Attention drop for self-training: p={}".format(self.attention_drop))
+        self.epsilon = train_config.get("epsilon", None)
+        self.logger.info("Epsilon for epsilon-greedy: {}".format(self.epsilon))
 
     def save_checkpoint(self):
         """
@@ -831,7 +833,8 @@ class TrainManager:
                         pe_ratio=self.pe_ratio,
                         beam_size=self.beam_size,
                         beam_alpha=self.beam_alpha,
-                        self_attention_drop=self.attention_drop)
+                        self_attention_drop=self.attention_drop,
+                        epsilon=self.epsilon)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
@@ -956,6 +959,12 @@ class TrainManager:
 
             self.logger.info("{} BASELINE: {}".format(self.baseline, np.mean(self.rewards)))
             reward -= baseline_reward
+
+            # update per-action stats (incl. BL)
+            for i, c in zip(regulator_pred.cpu().numpy(), costs.cpu().numpy()):
+                self.model.rewards_per_output[i].append(reward * 100)
+                self.model.costs_per_output[i].append(c)
+
         trade_off = costs.new([reward*100]) / (costs+1)
         if self.entropy_regularizer > 0:
             entropy_penalty = self.entropy_regularizer*-nll - self.entropy_regularizer
