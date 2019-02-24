@@ -41,7 +41,7 @@ class TrainManager:
         self.logger = self._make_logger()
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
-        self.loss_weights = train_config.get("loss_weights", {"mt": 1.0, "regulator": 1.0})
+        self.loss_weights = train_config.get("loss_weights", {"mt": 1.0, "regulator": 0.0})
         criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction='none')
         self.learning_rate_min = train_config.get("learning_rate_min", 1.0e-8)
         if train_config["loss"].lower() not in ["crossentropy", "xent",
