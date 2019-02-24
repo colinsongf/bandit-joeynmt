@@ -542,17 +542,19 @@ class TrainManager:
                 update = count == 0
 
                 # print(count, update, self.steps)
-                if self.only_sup is not False:
+                if self.only_sup is not False and self.model.regulator is not None:
                     only_sup = self.model.regulator.label2index.get(self.only_sup, self.only_sup)
                 else:
                     only_sup = False
                 batch_loss, reg_log_probs, reg_pred, costs = \
                     self._train_batch_mt(batch, update=update, pred=only_sup)
-                all_reg_log_probs.append(reg_log_probs)
-                all_reg_preds.append(reg_pred)
-                batch_costs.append(costs)
-                all_costs = torch.cat(batch_costs, 0)
-                self.total_cost += all_costs.sum()
+
+                if self.model.regulator is not None:
+                    all_reg_log_probs.append(reg_log_probs)
+                    all_reg_preds.append(reg_pred)
+                    batch_costs.append(costs)
+                    all_costs = torch.cat(batch_costs, 0)
+                    self.total_cost += all_costs.sum()
 
                 if reg_pred is not None:
                     self.regulator_outputs.extend(reg_pred.detach().cpu().numpy())
@@ -658,7 +660,6 @@ class TrainManager:
                 # log learning progress
                 if self.model.training and self.steps % self.logging_freq == 0 \
                         and update:
-                    print("SELF TOTAL COST", self.total_cost)
 
                     elapsed = time.time() - start - total_valid_duration
                     elapsed_tokens = self.total_tokens - processed_tokens
