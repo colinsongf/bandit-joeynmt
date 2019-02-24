@@ -112,8 +112,9 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
         self.rewards = []
-        self.rewards_per_output = {i: [] for i in self.regulator.index2label.keys()}
-        self.costs_per_output = {i: [] for i in self.regulator.index2label.keys()}
+        if self.regulator is not None:
+            self.rewards_per_output = {i: [] for i in self.regulator.index2label.keys()}
+            self.costs_per_output = {i: [] for i in self.regulator.index2label.keys()}
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
