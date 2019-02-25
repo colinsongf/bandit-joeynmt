@@ -112,6 +112,8 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
         self.rewards = []
+        self.ters = []
+        self.entropies = []
         if self.regulator is not None:
             self.rewards_per_output = {i: [] for i in self.regulator.index2label.keys()}
             self.costs_per_output = {i: [] for i in self.regulator.index2label.keys()}
@@ -1031,6 +1033,100 @@ class Model(nn.Module):
                     reg_pred = torch.from_numpy(
                         np.full(shape=(batch_size), fill_value=fill_value)).to(
                         regulator_out.device).long()
+                elif pred == "user":
+                    # choose according to HTER: TODO never none
+                    # if perfect: do self-training
+                    # if great: weak feedback
+                    # if okay: full feedback
+                    sample_hyp, _ = beam_search(size=beam_size,
+                                                encoder_output=encoder_out,
+                                                encoder_hidden=encoder_hidden,
+                                                src_mask=batch.src_mask,
+                                                embed=self.trg_embed,
+                                                max_output_length=max_output_length,
+                                                alpha=beam_alpha,
+                                                eos_index=self.eos_index,
+                                                pad_index=self.pad_index,
+                                                bos_index=self.bos_index,
+                                                decoder=self.decoder)
+                    decoded_hyps = arrays_to_sentences(sample_hyp, vocabulary=self.trg_vocab)
+                    decoded_refs = arrays_to_sentences(batch.trg, vocabulary=self.trg_vocab)
+                    ters = ster(hypotheses=decoded_hyps, references=decoded_refs)
+                    # collect all ters
+                    self.ters.extend(ters)
+                    good = np.percentile(a=self.ters, q=50, axis=0)
+                    very_good = np.percentile(a=self.ters, q=95, axis=0)
+                    fill_value = np.zeros(shape=(batch_size))
+                    for i, ter in enumerate(ters):
+                        if ter > very_good:
+                            # self-supervision
+                            label = "self"
+                        elif ter > good:
+                            # weak feedback
+                            label = "weak"
+                        else:  # full feedback
+                            label = "full"
+                        # TODO no skipping
+                        fill_value[i] = self.regulator.label2index[label]
+                    reg_pred = torch.from_numpy(fill_value).to(
+                        regulator_out.device).long()
+
+                elif pred == "uncertainty":
+                    sample_hyp, _ = beam_search(size=beam_size,
+                                                encoder_output=encoder_out,
+                                                encoder_hidden=encoder_hidden,
+                                                src_mask=batch.src_mask,
+                                                embed=self.trg_embed,
+                                                max_output_length=max_output_length,
+                                                alpha=beam_alpha,
+                                                eos_index=self.eos_index,
+                                                pad_index=self.pad_index,
+                                                bos_index=self.bos_index,
+                                                decoder=self.decoder)
+                    bos_array = np.full(shape=(batch_size, 1),
+                                        fill_value=self.bos_index)
+                    # prepend bos but cut off one bos
+                    sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp),
+                                                        axis=1)[:, :-1]
+                    # print("with bos", bs_hyp_pad_bos)
+
+                    # treat bs output as target for forced decoding to get log likelihood of bs output
+                    sample_out, _, _, _ = self.decode(
+                        encoder_output=encoder_out,
+                        encoder_hidden=encoder_hidden,
+                        trg_input=batch.src_mask.new(
+                            sample_hyp_pad_bos).long(),
+                        src_mask=batch.src_mask,
+                        unrol_steps=sample_hyp_pad_bos.shape[1])
+                    sample_log_probs = F.log_softmax(sample_out, dim=-1)
+
+                    #print("sample log probs", sample_log_probs.shape)  # batch x time x vocab
+                    avg_sample_entropy = -torch.sum(sample_log_probs*torch.exp(sample_log_probs), dim=2).mean(dim=1).detach().cpu().numpy()
+                    #print("entropy", avg_sample_entropy)
+
+                    self.entropies.extend(avg_sample_entropy)
+                    okay = np.percentile(a=self.entropies, q=50, axis=0)
+                    good = np.percentile(a=self.entropies, q=15, axis=0)
+                    very_good = np.percentile(a=self.entropies, q=5, axis=0)
+                    fill_value = np.zeros(shape=(batch_size))
+                    for i, ent in enumerate(avg_sample_entropy):
+                        if ent < very_good:
+                            # no supervision if very certain
+                            label = "none"
+                        elif ent < good:
+                            # self supervision when still certain
+                            label = "self"
+                        elif ent < okay:
+                            # weak supervision if not really certain
+                            label = "weak"
+                        else:  # full feedback if uncertain
+                            label = "full"
+                        fill_value[i] = self.regulator.label2index[label]
+                    reg_pred = torch.from_numpy(fill_value).to(
+                        regulator_out.device).long()
+                    print(reg_pred)
+
+
                 else:
                     fill_value = pred
                     reg_pred = torch.from_numpy(
