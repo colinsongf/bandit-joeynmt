@@ -87,6 +87,7 @@ def plot_models(models, x_value, y_value, output_path):
                ys.append(logged_values["MT-bleu"])
         print("XS", xs)
         print("YS", ys)
+        xs = [x_i - xs[0] for x_i in xs]
         assert len(xs) == len(ys)
         y_maxes.append(max(ys))
         x_maxes.append(max(xs))
@@ -97,8 +98,8 @@ def plot_models(models, x_value, y_value, output_path):
 
     #ax.set_ylim()
     ax.set_xlim(min(x_mins), min(x_maxes))
-    ax.set_ylabel(y_value)
-    ax.set_xlabel(x_value)
+    ax.set_ylabel("BLEU" if y_value=="MT-bleu" else y_value)
+    ax.set_xlabel("Cumulative Cost" if x_value=="Total_Cost" else "Batch Updates")
     #f.show()
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles, labels)
