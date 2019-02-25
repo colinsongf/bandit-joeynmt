@@ -48,7 +48,7 @@ def read_vfiles(vfiles, labels):
     return models
 
 
-def plot_models(models, x_value, y_value, output_path):
+def plot_models(models, x_value, y_value, output_path, plot_sup):
     """
     Plot the learning curves for several models
     :param models:
@@ -66,7 +66,8 @@ def plot_models(models, x_value, y_value, output_path):
     print("X value: {}".format(x_value))
     print("Y value: {}".format(y_value))
     f = plt.figure()
-    ax = f.add_subplot(1, 1, 1)
+    ax = f.add_subplot(2, 1, 1)
+    ax_sup = f.add_subplot(2, 1, 2)
 
     # cut plot at shortest ys
     y_maxes = []
@@ -76,17 +77,25 @@ def plot_models(models, x_value, y_value, output_path):
     for col, model_name in enumerate(sorted(models)):
         xs = []
         ys = []
+        sup_ys = {"weak": [], "full": [], "none": [], "self": []}
         for step in sorted(models[model_name]):
             logged_values = models[model_name][step]
-            #print(logged_values)
+            print(logged_values)
             if x_value == "time":
                 xs.append(step)
             elif x_value == "Total_Cost":
-                xs.append(logged_values["Total_Cost"])
+                cost = logged_values["Total_Cost"]
+                xs.append(cost)
             if y_value == "MT-bleu":
-               ys.append(logged_values["MT-bleu"])
+                ys.append(logged_values["MT-bleu"])
+                if plot_sup:
+                    sup_ys["full"].append(logged_values["%full_sup"])
+                    sup_ys["weak"].append(logged_values["%weak_sup"])
+                    sup_ys["none"].append(logged_values["%no_sup"])
+                    sup_ys["self"].append(logged_values["%self_sup"])
         print("XS", xs)
         print("YS", ys)
+        print("sUP YS", sup_ys)
         xs = [x_i - xs[0] for x_i in xs]
         assert len(xs) == len(ys)
         y_maxes.append(max(ys))
@@ -95,6 +104,11 @@ def plot_models(models, x_value, y_value, output_path):
 
         #f.plot(xs, ys)
         ax.plot(xs, ys, label=model_name)
+        if plot_sup:
+            ax_sup.bar(xs, sup_ys["none"], label="none")
+            ax_sup.bar(xs, sup_ys["self"], bottom=sup_ys["none"], label="self")
+            ax_sup.bar(xs, sup_ys["weak"], bottom=np.array(sup_ys["none"])+np.array(sup_ys["self"]),label="weak")
+            ax_sup.bar(xs, sup_ys["full"], bottom=np.array(sup_ys["none"])+np.array(sup_ys["self"])+np.array(sup_ys["weak"]),label="full")
 
     #ax.set_ylim()
     ax.set_xlim(min(x_mins), min(x_maxes))
@@ -103,6 +117,8 @@ def plot_models(models, x_value, y_value, output_path):
     #f.show()
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles, labels)
+    handles, labels = ax_sup.get_legend_handles_labels()
+    ax_sup.legend(handles, labels)
    # plt.show()
 
         # now one plot instead of many
@@ -141,6 +157,7 @@ if __name__ == "__main__":
     parser.add_argument("--labels", type=str, nargs="+", default=None)
     parser.add_argument("--x_value", type=str, default="time")
     parser.add_argument("--y_value", type=str, default="MT-bleu")
+    parser.add_argument("--plot_sup", action="store_true")
     parser.add_argument("--output_path", type=str, default="plot.pdf",
                         help="Plot will be stored in this location.")
     args = parser.parse_args()
@@ -149,4 +166,4 @@ if __name__ == "__main__":
 
     models = read_vfiles(vfiles, labels=args.labels)
 
-    plot_models(models, x_value=args.x_value, y_value=args.y_value, output_path=args.output_path)
+    plot_models(models, x_value=args.x_value, y_value=args.y_value, output_path=args.output_path, plot_sup=args.plot_sup)
