@@ -21,16 +21,19 @@ plt.rcParams['axes.prop_cycle'] = ("cycler('color', 'rgbk') + cycler('linestyle'
                                    #" cycler('lw', [1, 2, 3, 4])")
 
 
-def read_vfiles(vfiles):
+def read_vfiles(vfiles, labels):
     """
     Parse validation report files
     :param vfiles: list of files
     :return:
     """
     models = {}
-    for vfile in vfiles:
-        model_name = vfile.split("/")[-2] if "//" not in vfile \
-            else vfile.split("/")[-3]
+    if labels is None:
+        labels = vfiles
+    for vfile, label in zip(vfiles, labels):
+        model_name = label
+        #model_name = vfile.split("/")[-2] if "//" not in vfile \
+        #    else vfile.split("/")[-3]
         with open(vfile, "r") as validf:
             steps = {}
             for line in validf:
@@ -70,7 +73,7 @@ def plot_models(models, x_value, y_value, output_path):
     x_maxes = []
     x_mins = []
 
-    for col, model_name in enumerate(models):
+    for col, model_name in enumerate(sorted(models)):
         xs = []
         ys = []
         for step in sorted(models[model_name]):
@@ -134,6 +137,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("JoeyNMT Validation plotting.")
     parser.add_argument("model_dirs", type=str, nargs="+",
                         help="Model directories.")
+    parser.add_argument("--labels", type=str, nargs="+", default=None)
     parser.add_argument("--x_value", type=str, default="time")
     parser.add_argument("--y_value", type=str, default="MT-bleu")
     parser.add_argument("--output_path", type=str, default="plot.pdf",
@@ -142,6 +146,6 @@ if __name__ == "__main__":
 
     vfiles = [m+"/validations.txt" for m in args.model_dirs]
 
-    models = read_vfiles(vfiles)
+    models = read_vfiles(vfiles, labels=args.labels)
 
     plot_models(models, x_value=args.x_value, y_value=args.y_value, output_path=args.output_path)
