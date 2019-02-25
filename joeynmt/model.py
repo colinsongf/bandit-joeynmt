@@ -1023,6 +1023,14 @@ class Model(nn.Module):
                         reg_pred[k] = fill_value
                     reg_pred = torch.from_numpy(reg_pred).to(
                         regulator_out.device).long()
+                elif pred == "random-batch":
+                    # random choice for whole batch
+                    fill_value = np.random.randint(0,
+                                                   self.regulator.output_size,
+                                                   size=1)
+                    reg_pred = torch.from_numpy(
+                        np.full(shape=(batch_size), fill_value=fill_value)).to(
+                        regulator_out.device).long()
                 else:
                     fill_value = pred
                     reg_pred = torch.from_numpy(
