@@ -33,6 +33,7 @@ class TrainManager:
         """
         train_config = config["training"]
         test_config = config["testing"]
+        self.new_ckpt = train_config.get("new_ckpt", False)
         self.beam_size = test_config.get("beam_size", 5)
         self.beam_alpha = test_config.get("beam_alpha", 1.0)
         self.model = model
@@ -467,8 +468,9 @@ class TrainManager:
         # restore counts
         self.steps = model_checkpoint["steps"]
         self.total_tokens = model_checkpoint["total_tokens"]
-        self.best_ckpt_score = model_checkpoint["best_ckpt_score"]
-        self.best_ckpt_iteration = model_checkpoint["best_ckpt_iteration"]
+        if not self.new_ckpt:
+            self.best_ckpt_score = model_checkpoint["best_ckpt_score"]
+            self.best_ckpt_iteration = model_checkpoint["best_ckpt_iteration"]
 
         # move parameters to cuda
         if self.use_cuda:
