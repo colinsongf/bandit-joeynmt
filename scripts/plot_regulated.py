@@ -90,7 +90,8 @@ def plot_models(models, x_value, y_value, output_path):
     ax.set_ylabel(y_value)
     ax.set_xlabel(x_value)
     #f.show()
-    f.legend()
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels)
    # plt.show()
 
         # now one plot instead of many
