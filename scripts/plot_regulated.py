@@ -68,6 +68,7 @@ def plot_models(models, x_value, y_value, output_path):
     # cut plot at shortest ys
     y_maxes = []
     x_maxes = []
+    x_mins = []
 
     for col, model_name in enumerate(models):
         xs = []
@@ -86,12 +87,13 @@ def plot_models(models, x_value, y_value, output_path):
         assert len(xs) == len(ys)
         y_maxes.append(max(ys))
         x_maxes.append(max(xs))
+        x_mins.append(min(xs))
 
         #f.plot(xs, ys)
         ax.plot(xs, ys, label=model_name)
 
     #ax.set_ylim()
-    ax.set_xlim(0, min(x_maxes))
+    ax.set_xlim(min(x_mins), min(x_maxes))
     ax.set_ylabel(y_value)
     ax.set_xlabel(x_value)
     #f.show()
