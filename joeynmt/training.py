@@ -818,7 +818,6 @@ class TrainManager:
         :return:
         """
         # only run regulator if its loss is > 0
-
         batch_loss, regulator_log_probs, regulator_pred, batch_tokens, batch_seqs, \
             batch_costs = self.model.get_loss_for_batch(
                         batch=batch, criterion=self.criterion,

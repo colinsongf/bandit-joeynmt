@@ -189,7 +189,10 @@ class Model(nn.Module):
     # then sum loss
     # -> still mini-batching, but smaller
 
-    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask, max_output_length, criterion, target, level, beam_size=10, beam_alpha=1.0, entropy=False, logger=None, attention_drop=0.0):
+    def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask,
+                       max_output_length, criterion, target, level, beam_size=10,
+                       beam_alpha=1.0, entropy=False, logger=None,
+                       attention_drop=0.0, hyps=None, hyp_inputs=None, hyp_masks=None):
         """
         Compute the loss for self-supervised training for the given selection
         of indices of the batch
@@ -207,39 +210,57 @@ class Model(nn.Module):
         selected_encoder_hidden = torch.index_select(encoder_hidden, index=selection,
                                                  dim=0)
         selected_src_mask = torch.index_select(src_mask, index=selection, dim=0)
-        bs_hyp, _ = beam_search(size=beam_size,
-                                       encoder_output=selected_encoder_out,
-                                       encoder_hidden=selected_encoder_hidden,
-                                       src_mask=selected_src_mask,
-                                       embed=self.trg_embed,
-                                       max_output_length=max_output_length,
-                                       alpha=beam_alpha,
-                                       eos_index=self.eos_index,
-                                       pad_index=self.pad_index,
-                                       bos_index=self.bos_index,
-                                       decoder=self.decoder)
         selected_batch_size = selection.shape[0]
-        selected_tokens = bs_hyp.size
-        bs_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
+
+        if hyps is not None and hyp_inputs is not None and hyp_masks is not None:
+            selected_hyps = torch.index_select(hyps, index=selection, dim=0)
+            selected_hyp_inputs = torch.index_select(hyp_inputs, index=selection, dim=0)
+            selected_hyp_masks = torch.index_select(hyp_masks, index=selection, dim=0)
+            logger.info("SELF USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
+            # instead of sampling from the current model, take the log hypothesis
+            bs_hyp = selected_hyps
+            bs_hyp_mask = selected_hyp_masks
+            bs_hyp_inputs = selected_hyp_inputs
+            bs_target = bs_hyp
+            selected_tokens = selected_hyp_masks.sum().cpu().numpy()
+        else:
+            bs_hyp, _ = beam_search(size=beam_size,
+                                           encoder_output=selected_encoder_out,
+                                           encoder_hidden=selected_encoder_hidden,
+                                           src_mask=selected_src_mask,
+                                           embed=self.trg_embed,
+                                           max_output_length=max_output_length,
+                                           alpha=beam_alpha,
+                                           eos_index=self.eos_index,
+                                           pad_index=self.pad_index,
+                                           bos_index=self.bos_index,
+                                           decoder=self.decoder)
+            bs_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
                                   fill_value=self.pad_index)
-        for i, row in enumerate(bs_hyp):
-            for j, col in enumerate(row):
-                bs_hyp_pad[i, j] = col
-        # print("padded", bs_hyp_pad)
-        bos_array = np.full(shape=(selected_batch_size, 1),
-                            fill_value=self.bos_index)
-        # prepend bos but cut off one bos
-        bs_hyp_pad_bos = np.concatenate((bos_array, bs_hyp_pad),
-                                             axis=1)[:, :-1]
+            # print("padded", bs_hyp_pad)
+            bos_array = np.full(shape=(selected_batch_size, 1),
+                                fill_value=self.bos_index)
+            # prepend bos but cut off one bos
+            bs_hyp_pad_bos = np.concatenate((bos_array, bs_hyp_pad),
+                                            axis=1)[:, :-1]
+
+            for i, row in enumerate(bs_hyp):
+                for j, col in enumerate(row):
+                    bs_hyp_pad[i, j] = col
+
+            bs_hyp_inputs = src_mask.new(bs_hyp_pad_bos).long()
+            bs_target = src_mask.new(bs_hyp_pad).long()
+
+            selected_tokens = bs_hyp.size
+
         # print("with bos", bs_hyp_pad_bos)
 
         # treat bs output as target for forced decoding to get log likelihood of bs output
         bs_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
                                            encoder_hidden=selected_encoder_hidden,
-                                           trg_input=src_mask.new(
-                                               bs_hyp_pad_bos).long(),
+                                           trg_input=bs_hyp_inputs,
                                            src_mask=selected_src_mask,
-                                           unrol_steps=bs_hyp_pad_bos.shape[1],
+                                           unrol_steps=bs_hyp_inputs.shape[1],
                                       attention_drop=attention_drop)
         bs_log_probs = F.log_softmax(bs_out, dim=-1)
         # greedy_log_prob = self.force_decode(encoder_output=encoder_out,
@@ -247,7 +268,6 @@ class Model(nn.Module):
         #                                 trg_input=batch.trg.new(greedy_hyp).long(),
         #                                 src_mask=batch.src_mask)
 
-        bs_target = src_mask.new(bs_hyp_pad).long()
 
         bs_nll = criterion(
             input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
@@ -283,7 +303,8 @@ class Model(nn.Module):
                        weak_baseline=True, weak_temperature=1.0,
                        weak_search="sample",
                        beam_size=10, beam_alpha=1.0, logger=None,
-                       case_sensitive=True):
+                       case_sensitive=True,
+                       hyps=None, hyp_inputs=None, hyp_masks=None):
         """
         Compute weakly-supervised loss for selected inputs
 
@@ -305,60 +326,79 @@ class Model(nn.Module):
         trg_np = selected_trg.detach().cpu().numpy()
         selected_batch_size = selection.shape[0]
 
-        if weak_search == "sample":
-            sample_hyp, _ = sample(encoder_output=selected_encoder_out,
-                                 encoder_hidden=selected_encoder_hidden,
-                                 src_mask=selected_src_mask, embed=self.trg_embed,
-                                 max_output_length=max_output_length,
-                                 bos_index=self.bos_index,
-                                 decoder=self.decoder, temperature=weak_temperature)
+        if hyps is not None and hyp_inputs is not None and hyp_masks is not None \
+                and weak_search == "offline":
+            selected_hyps = torch.index_select(hyps, index=selection, dim=0)
+            selected_hyp_inputs = torch.index_select(hyp_inputs, index=selection, dim=0)
+            selected_hyp_masks = torch.index_select(hyp_masks, index=selection, dim=0)
+            logger.info("WEAK USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
+            # instead of sampling from the current model, take the log hypothesis
+            sample_hyp = selected_hyps
+            sample_hyp_mask = selected_hyp_masks
+            sample_hyp_inputs = selected_hyp_inputs
+            sample_target = sample_hyp
+            selected_tokens = sample_hyp_mask.sum().cpu().numpy()
+        else:
 
-        elif weak_search == "beam":
-            sample_hyp, _ = beam_search(size=beam_size,
-                                    encoder_output=selected_encoder_out,
-                                    encoder_hidden=selected_encoder_hidden,
-                                    src_mask=selected_src_mask,
-                                    embed=self.trg_embed,
-                                    max_output_length=max_output_length,
-                                    alpha=beam_alpha,
-                                    eos_index=self.eos_index,
-                                    pad_index=self.pad_index,
-                                    bos_index=self.bos_index,
-                                    decoder=self.decoder)
-        else:  # greedy
-            sample_hyp, _ = greedy(encoder_output=selected_encoder_out,
-                                   encoder_hidden=selected_encoder_hidden,
-                                   src_mask=selected_src_mask,
-                                   embed=self.trg_embed,
-                                   max_output_length=max_output_length,
-                                   bos_index=self.bos_index,
-                                   decoder=self.decoder)
+            if weak_search == "sample":
+                sample_hyp, _ = sample(encoder_output=selected_encoder_out,
+                                     encoder_hidden=selected_encoder_hidden,
+                                     src_mask=selected_src_mask, embed=self.trg_embed,
+                                     max_output_length=max_output_length,
+                                     bos_index=self.bos_index,
+                                     decoder=self.decoder, temperature=weak_temperature)
 
-        sample_mask = np.not_equal(sample_hyp, self.pad_index).astype(int)
+            elif weak_search == "beam":
+                sample_hyp, _ = beam_search(size=beam_size,
+                                        encoder_output=selected_encoder_out,
+                                        encoder_hidden=selected_encoder_hidden,
+                                        src_mask=selected_src_mask,
+                                        embed=self.trg_embed,
+                                        max_output_length=max_output_length,
+                                        alpha=beam_alpha,
+                                        eos_index=self.eos_index,
+                                        pad_index=self.pad_index,
+                                        bos_index=self.bos_index,
+                                        decoder=self.decoder)
+            else:  # greedy
+                sample_hyp, _ = greedy(encoder_output=selected_encoder_out,
+                                       encoder_hidden=selected_encoder_hidden,
+                                       src_mask=selected_src_mask,
+                                       embed=self.trg_embed,
+                                       max_output_length=max_output_length,
+                                       bos_index=self.bos_index,
+                                       decoder=self.decoder)
 
-        #sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
-        #                     fill_value=self.pad_index)
-        #for i, row in enumerate(sample_hyp):
-        #    for j, col in enumerate(row):
-        #        sample_hyp_pad[i, j] = col
-        # print("padded", bs_hyp_pad)
-        bos_array = np.full(shape=(selected_batch_size, 1),
-                            fill_value=self.bos_index)
-        # prepend bos but cut off one bos
-        sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp),
-                                        axis=1)[:, :-1]
+            sample_hyp_mask = np.not_equal(sample_hyp, self.pad_index).astype(int)
+
+            #sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
+            #                     fill_value=self.pad_index)
+            #for i, row in enumerate(sample_hyp):
+            #    for j, col in enumerate(row):
+            #        sample_hyp_pad[i, j] = col
+            # print("padded", bs_hyp_pad)
+            bos_array = np.full(shape=(selected_batch_size, 1),
+                                fill_value=self.bos_index)
+            # prepend bos but cut off one pad
+            sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp),
+                                            axis=1)[:, :-1]
+            sample_hyp_inputs = src_mask.new(sample_hyp_pad_bos).long()
+            sample_target = src_mask.new(sample_hyp).long()
+            selected_tokens = sample_hyp.size
+
+
+
+
         # print("with bos", bs_hyp_pad_bos)
 
         # treat bs output as target for forced decoding to get log likelihood of bs output
         sample_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
                                       encoder_hidden=selected_encoder_hidden,
-                                      trg_input=src_mask.new(
-                                          sample_hyp_pad_bos).long(),
+                                      trg_input=sample_hyp_inputs,
                                       src_mask=selected_src_mask,
-                                      unrol_steps=sample_hyp_pad_bos.shape[1])
+                                      unrol_steps=sample_hyp_inputs.shape[1])
         sample_log_probs = F.log_softmax(sample_out, dim=-1)
 
-        sample_target = src_mask.new(sample_hyp).long()
 
         sample_nll = criterion(
             input=sample_log_probs.contiguous().view(-1, sample_log_probs.size(-1)),
@@ -407,16 +447,16 @@ class Model(nn.Module):
                     try:
                         if trg_np[i, j] == val:
                             markings[i, j] = 1.
-                            if sample_mask[i, j]:
+                            if sample_hyp_mask[i, j]:
                                 valid_rewards.append(1)
-                        elif sample_mask[i, j]:
+                        elif sample_hyp_mask[i, j]:
                             valid_rewards.append(0)
                     except IndexError:  # BS is longer than trg
                         continue
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_markings = (markings - np.mean(self.rewards))*sample_mask
+                    new_markings = (markings - np.mean(self.rewards))*sample_hyp_mask
                 else:
                     new_markings = markings
                 #update baseline
@@ -429,7 +469,7 @@ class Model(nn.Module):
            #     # baseline over time
            #     # TODO over batch?
            #     markings -= np.mean(markings, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(new_markings*sample_mask).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_markings*sample_hyp_mask).float()).sum(1)
             costs = markings.sum(-1)
 
             logger.info("Examples from weak supervision:")
@@ -473,7 +513,7 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_matches = (matches - np.mean(self.rewards))*sample_mask
+                    new_matches = (matches - np.mean(self.rewards))*sample_hyp_mask
                 else:
                     new_matches = matches
                 # update baseline
@@ -487,7 +527,7 @@ class Model(nn.Module):
             #    # baseline over time
             #    # TODO over batch?
             #    matches -= np.mean(matches, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(new_matches*sample_mask).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_matches*sample_hyp_mask).float()).sum(1)
 
             costs = matches.sum(-1)
 
@@ -541,13 +581,13 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_mask
+                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_hyp_mask
                 else:
                     new_rewards = all_rewards
                 # update baseline
                 # only with non-padding areas
                 valid_rewards = []
-                for r, m in zip(all_rewards, sample_mask):
+                for r, m in zip(all_rewards, sample_hyp_mask):
                     for r_i, m_i in zip(r, m):
                         if m_i:
                             valid_rewards.append(r_i)
@@ -559,7 +599,7 @@ class Model(nn.Module):
             #    # TODO over batch?
             #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
 
-            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_mask).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_hyp_mask).float()).sum(1)
 
             costs = all_rewards.sum(-1)
 
@@ -623,13 +663,13 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_mask
+                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_hyp_mask
                 else:
                     new_rewards = all_rewards
                 # update baseline
                 # only with non-padding areas
                 valid_rewards = []
-                for r, m in zip(all_rewards, sample_mask):
+                for r, m in zip(all_rewards, sample_hyp_mask):
                     for r_i, m_i in zip(r, m):
                         if m_i:
                             valid_rewards.append(r_i)
@@ -642,7 +682,7 @@ class Model(nn.Module):
             #    # TODO over batch?
             #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
 
-            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_mask).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_hyp_mask).float()).sum(1)
 
             costs = all_rewards.sum(-1)
 
@@ -749,7 +789,6 @@ class Model(nn.Module):
         # how many were selected?
 
         assert len(costs) == selected_batch_size
-        selected_tokens = sample_hyp.size
 
         assert chunk_loss.size(0) == selected_batch_size
         return chunk_loss.sum(), selected_tokens, selected_batch_size, costs
@@ -1170,7 +1209,10 @@ class Model(nn.Module):
                     max_output_length=max_output_length, criterion=criterion,
                     logger=logger, target=batch.trg, level=level,
                     beam_size=beam_size, beam_alpha=beam_alpha,
-                    attention_drop=self_attention_drop)
+                    attention_drop=self_attention_drop,
+                    hyps=batch.hyp if hasattr(batch, 'hyp') else None,
+                    hyp_inputs=batch.hyp_input if hasattr(batch, 'hyp_input') else None,
+                    hyp_masks=batch.hyp_mask if hasattr(batch, 'hyp_mask') else None)
                 #print("self sup selected", self_sup_loss_selected)
                 batch_loss += self_sup_loss_selected.sum()
                 batch_tokens += tokens
@@ -1188,7 +1230,10 @@ class Model(nn.Module):
                     chunk_type=chunk_type, level=level,
                     target=batch.trg, weak_temperature=weak_temperature,
                     weak_search=weak_search, beam_size=beam_size, beam_alpha=beam_alpha,
-                    weak_baseline=weak_baseline, logger=logger, case_sensitive=case_sensitive)
+                    weak_baseline=weak_baseline, logger=logger, case_sensitive=case_sensitive,
+                    hyps=batch.hyp if hasattr(batch, 'hyp') else None,
+                    hyp_inputs=batch.hyp_input if hasattr(batch, 'hyp_input') else None,
+                    hyp_masks=batch.hyp_mask if hasattr(batch, 'hyp_mask') else None)
                 #print("weak sup selected", weak_sup_loss_selected)
                 batch_loss += weak_sup_loss_selected.sum()
                 batch_tokens += tokens

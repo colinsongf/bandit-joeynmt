@@ -40,6 +40,13 @@ class Batch:
             self.trg_mask = (self.trg != pad_index)
             self.ntokens = (self.trg != pad_index).data.sum().item()
 
+        if hasattr(torch_batch, "hyp"):
+            hyp, hyp_lengths = torch_batch.hyp
+            self.hyp_lengths = hyp_lengths
+            self.hyp_input = hyp[:, :-1]
+            self.hyp = hyp[:, 1:]
+            self.hyp_mask = (self.hyp != pad_index)
+
         if use_cuda:
             self._make_cuda()
 
@@ -56,6 +63,11 @@ class Batch:
             self.trg_input = self.trg_input.cuda()
             self.trg = self.trg.cuda()
             self.trg_mask = self.trg_mask.cuda()
+
+        if hasattr(self, "hyp"):
+            self.hyp = self.hyp.cuda()
+            self.hyp_input = self.hyp_input.cuda()
+            self.hyp_mask = self.hyp_mask.cuda()
 
     def sort_by_src_lengths(self):
         """
@@ -76,6 +88,11 @@ class Batch:
             sorted_trg_lengths = self.trg_lengths[perm_index]
             sorted_trg_mask = self.trg_mask[perm_index]
             sorted_trg = self.trg[perm_index]
+        if hasattr(self, "hyp"):
+            sorted_hyp = self.hyp[perm_index]
+            sorted_hyp_lengths = self.hyp_lengths[perm_index]
+            sorted_hyp_input = self.hyp_input[perm_index]
+            sorted_hyp_mask = self.hyp_mask[perm_index]
 
         self.src = sorted_src
         self.src_lengths = sorted_src_lengths
@@ -86,6 +103,12 @@ class Batch:
             self.trg_mask = sorted_trg_mask
             self.trg_lengths = sorted_trg_lengths
             self.trg = sorted_trg
+
+        if hasattr(self, "hyp"):
+            self.hyp = sorted_hyp
+            self.hyp_lengths = sorted_hyp_lengths
+            self.hyp_mask = sorted_hyp_mask
+            self.hyp_input = sorted_hyp_input
 
         if self.use_cuda:
             self._make_cuda()

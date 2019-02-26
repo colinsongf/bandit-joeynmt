@@ -233,6 +233,7 @@ def load_data(cfg):
     data_cfg = cfg["data"]
     src_lang = data_cfg["src"]
     trg_lang = data_cfg["trg"]
+    hyp_suffix = data_cfg.get("hyp", None)
     train_path = data_cfg["train"]
     dev_path = data_cfg["dev"]
     test_path = data_cfg.get("test", None)
@@ -256,14 +257,26 @@ def load_data(cfg):
                            unk_token=UNK_TOKEN,
                            batch_first=True, lower=lowercase,
                            include_lengths=True)
-    train_data = TranslationDataset(path=train_path,
-                                    exts=("." + src_lang, "." + trg_lang),
-                                    fields=(src_field, trg_field),
-                                    filter_pred=
-                                    lambda x: len(vars(x)['src'])
-                                              <= max_sent_length and
-                                              len(vars(x)['trg'])
-                                              <= max_sent_length)
+
+    if hyp_suffix is not None:
+        print("READING A PE DATASET")
+        train_data = PEDataset(path=train_path,
+                               exts=("." + src_lang, "." + trg_lang, "." + hyp_suffix),
+                                fields=(src_field, trg_field, trg_field),
+                                filter_pred=
+                                lambda x: len(vars(x)['src'])
+                                          <= max_sent_length and
+                                          len(vars(x)['trg'])
+                                          <= max_sent_length)
+    else:
+        train_data = TranslationDataset(path=train_path,
+                                        exts=("." + src_lang, "." + trg_lang),
+                                        fields=(src_field, trg_field),
+                                        filter_pred=
+                                        lambda x: len(vars(x)['src'])
+                                                  <= max_sent_length and
+                                                  len(vars(x)['trg'])
+                                                  <= max_sent_length)
     max_size = data_cfg.get("voc_limit", sys.maxsize)
     min_freq = data_cfg.get("voc_min_freq", 1)
     src_vocab_file = data_cfg.get("src_vocab", None)
@@ -292,6 +305,35 @@ def load_data(cfg):
     trg_field.vocab = trg_vocab
     return train_data, dev_data, test_data, src_vocab, trg_vocab
 
+
+class PEDataset(TranslationDataset):
+    """Defines a dataset for machine translation."""
+
+    def __init__(self, path, exts, fields, **kwargs):
+        """Create a TranslationDataset given paths and fields.
+
+        Arguments:
+            path: Common prefix of paths to the data files for both languages.
+            exts: A tuple containing the extension to path for each language.
+            fields: A tuple containing the fields that will be used for data
+                in each language.
+            Remaining keyword arguments: Passed to the constructor of
+                data.Dataset.
+        """
+        if not isinstance(fields[0], (tuple, list)):
+            fields = [('src', fields[0]), ('trg', fields[1]), ('hyp', fields[2])]
+
+        src_path, trg_path, hyp_path = tuple(os.path.expanduser(path + x) for x in exts)
+
+        examples = []
+        with open(src_path) as src_file, open(trg_path) as trg_file, open(hyp_path) as hyp_file:
+            for src_line, trg_line, hyp_line in zip(src_file, trg_file, hyp_file):
+                src_line, trg_line, hyp_line = src_line.strip(), trg_line.strip(), hyp_line.strip()
+                if src_line != '' and trg_line != '':
+                    examples.append(data.Example.fromlist(
+                        [src_line, trg_line, hyp_line], fields))
+
+        super(TranslationDataset, self).__init__(examples, fields, **kwargs)
 
 class MonoDataset(TranslationDataset):
     """Defines a dataset for machine translation without targets."""
