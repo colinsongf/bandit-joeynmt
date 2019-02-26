@@ -18,7 +18,8 @@ from joeynmt.helpers import log_data_info, load_data, \
     load_config, log_cfg, store_attention_plots, make_data_iter, \
     load_model_from_checkpoint
 from joeynmt.prediction import validate_on_data
-
+from joeynmt.helpers import array_to_sentence
+from joeynmt.metrics import ster, sbleu
 
 class TrainManager:
     """ Manages training loop, validations, learning rate scheduling
@@ -39,6 +40,7 @@ class TrainManager:
         self.model = model
         self.overwrite = train_config.get("overwrite", False)
         self.model_dir = self._make_model_dir(train_config["model_dir"])
+        self.log_reg_file = open(self.model_dir+"/reg.log", "a")
         self.logger = self._make_logger()
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
@@ -550,6 +552,39 @@ class TrainManager:
                     only_sup = False
                 batch_loss, reg_log_probs, reg_pred, costs = \
                     self._train_batch_mt(batch, update=update, pred=only_sup)
+
+                def _log_reg(batch, reg_pred, costs):
+                    """
+                    Log actions of regulator
+
+                    :param self:
+                    :param batch:
+                    :param reg_pred:
+                    :return:
+                    """
+                    # write to file:
+                    # step, batch_src, batch_trg, batch_hyp, ter, sbleu, reg_pred, reg_logprob, cost
+                    join_char = "" if self.level == "char" else " "
+                    for src, trg, hyp, reg, logp, cost in zip(batch.src, batch.trg, batch.hyp, reg_pred.detach().cpu().numpy(), reg_log_probs, costs):
+                        src = join_char.join(array_to_sentence(src, self.model.src_vocab))
+                        trg = join_char.join(array_to_sentence(trg, self.model.trg_vocab))
+                        hyp = join_char.join(array_to_sentence(hyp, self.model.trg_vocab))
+                        if self.level == "bpe":
+                            hyp_for_eval = hyp.replace("@@ ", "")
+                            trg_for_eval = trg.replace("@@ ", "")
+                        else:
+                            hyp_for_eval = hyp
+                            trg_for_eval = trg
+                        bleu = sbleu([hyp_for_eval], [trg_for_eval])[0]
+                        ter = ster([hyp_for_eval.split(join_char)], [trg_for_eval.split(join_char)])[0]
+                        action = self.model.regulator.index2label[reg]
+                        line = "{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{}\t{:4f}\t{}\n".format(self.steps, src, trg, hyp, bleu, ter, action, logp[reg].detach().cpu().numpy(), cost)
+                        self.log_reg_file.write(line)
+                    self.log_reg_file.flush()
+
+                if self.log_reg_file is not None:
+                    _log_reg(batch, reg_pred, costs)
+
 
                 if self.model.regulator is not None:
                     all_reg_log_probs.append(reg_log_probs)
