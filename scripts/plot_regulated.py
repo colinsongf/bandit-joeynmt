@@ -109,8 +109,7 @@ def plot_models(models, x_value, y_value, output_path, plot_sup, lim_x):
         assert len(xs) == len(ys)
         y_maxes.append(max(ys))
         x_maxes.append(max(xs))
-        if min(xs) > 0:
-            x_mins.append(min(xs))
+        x_mins.append(min([i for i in xs if i > 0]))
 
         #f.plot(xs, ys)
         ax.plot(xs, ys, label=model_name, markevery=[0, -1])
