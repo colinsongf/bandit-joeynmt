@@ -259,7 +259,6 @@ def load_data(cfg):
                            include_lengths=True)
 
     if hyp_suffix is not None:
-        print("READING A PE DATASET")
         train_data = PEDataset(path=train_path,
                                exts=("." + src_lang, "." + trg_lang, "." + hyp_suffix),
                                 fields=(src_field, trg_field, trg_field),

@@ -216,7 +216,7 @@ class Model(nn.Module):
             selected_hyps = torch.index_select(hyps, index=selection, dim=0)
             selected_hyp_inputs = torch.index_select(hyp_inputs, index=selection, dim=0)
             selected_hyp_masks = torch.index_select(hyp_masks, index=selection, dim=0)
-            logger.info("SELF USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
+            #logger.info("SELF USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
             # instead of sampling from the current model, take the log hypothesis
             bs_hyp = selected_hyps
             bs_hyp_mask = selected_hyp_masks
@@ -331,7 +331,7 @@ class Model(nn.Module):
             selected_hyps = torch.index_select(hyps, index=selection, dim=0)
             selected_hyp_inputs = torch.index_select(hyp_inputs, index=selection, dim=0)
             selected_hyp_masks = torch.index_select(hyp_masks, index=selection, dim=0)
-            logger.info("WEAK USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
+            #logger.info("WEAK USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
             # instead of sampling from the current model, take the log hypothesis
             sample_hyp = selected_hyps
             sample_hyp_mask = selected_hyp_masks
@@ -439,6 +439,9 @@ class Model(nn.Module):
             # print("trg", trg_np)
             # padding area is zero
             # TODO use case sensitivity
+            if type(sample_hyp) is torch.Tensor:
+                sample_hyp = sample_hyp.cpu().numpy()
+                sample_hyp_mask = sample_hyp_mask.cpu().numpy()
             markings = np.zeros_like(sample_hyp, dtype=float)
             # for baseline we don't track padding rewards since zeros
             valid_rewards = []
@@ -491,6 +494,9 @@ class Model(nn.Module):
             # 1 if occurs in reference, 0 if it doesn't
             # position-independent
             # TODO include case sensitivity
+            if type(sample_hyp) is torch.Tensor:
+                sample_hyp = sample_hyp.cpu().numpy()
+                sample_hyp_mask = sample_hyp_mask.cpu().numpy()
             valid_matches = []
             matches = np.zeros_like(sample_hyp, dtype=float)
             for i, row in enumerate(sample_hyp):
@@ -572,6 +578,10 @@ class Model(nn.Module):
                 rewards[x_longest - longest: x_longest] = 1
                 #return pred[x_longest - longest: x_longest]
                 return rewards
+
+            if type(sample_hyp) is torch.Tensor:
+                sample_hyp = sample_hyp.cpu().numpy()
+                sample_hyp_mask = sample_hyp_mask.cpu().numpy()
 
             all_rewards = np.zeros_like(sample_hyp, dtype=float)
             for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
