@@ -654,6 +654,9 @@ class Model(nn.Module):
                 return rewards
 
             all_rewards = np.zeros_like(sample_hyp, dtype=float)
+            if type(sample_hyp) is torch.Tensor:
+                sample_hyp = sample_hyp.cpu().numpy()
+                sample_hyp_mask = sample_hyp_mask.cpu().numpy()
             for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
                 r = all_longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
