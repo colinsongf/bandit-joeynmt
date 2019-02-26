@@ -66,8 +66,12 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
     print("X value: {}".format(x_value))
     print("Y value: {}".format(y_value))
     f = plt.figure()
-    ax = f.add_subplot(2, 1, 1)
-    ax_sup = f.add_subplot(2, 1, 2)
+
+    if plot_sup:
+        ax = f.add_subplot(2, 1, 1)
+        ax_sup = f.add_subplot(2, 1, 2)
+    else:
+        ax = f.add_subplot(1, 1, 1)
 
     # cut plot at shortest ys
     y_maxes = []
@@ -113,12 +117,13 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
     #ax.set_ylim()
     ax.set_xlim(min(x_mins), min(x_maxes))
     ax.set_ylabel("BLEU" if y_value=="MT-bleu" else y_value)
-    ax.set_xlabel("Cumulative Cost" if x_value=="Total_Cost" else "Batch Updates")
+    ax.set_xlabel("Cumulative Cost" if x_value=="Total_Cost" else "Iterations")
     #f.show()
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles, labels)
-    handles, labels = ax_sup.get_legend_handles_labels()
-    ax_sup.legend(handles, labels)
+    if plot_sup:
+        handles, labels = ax_sup.get_legend_handles_labels()
+        ax_sup.legend(handles, labels)
    # plt.show()
 
         # now one plot instead of many
