@@ -17,7 +17,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import argparse
 import numpy as np
 
-plt.rcParams['axes.prop_cycle'] = ("cycler('color', 'rgbk') + cycler('linestyle', ['-', '--', ':', '-.'])")
+plt.rcParams['axes.prop_cycle'] = ("cycler('color', 'rgbkm') * cycler('linestyle', ['-', '--', ':', '-.'])")
                                    #" cycler('lw', [1, 2, 3, 4])")
 
 
