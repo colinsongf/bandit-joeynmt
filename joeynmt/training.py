@@ -40,7 +40,7 @@ class TrainManager:
         self.model = model
         self.overwrite = train_config.get("overwrite", False)
         self.model_dir = self._make_model_dir(train_config["model_dir"])
-        self.log_reg_file = open(self.model_dir+"/reg.log", "a")
+        self.log_reg_file = open(self.model_dir+"/reg.log", "a") if self.model.regulator is not None else None
         self.logger = self._make_logger()
         self.pad_index = self.model.pad_index
         self.bos_index = self.model.bos_index
