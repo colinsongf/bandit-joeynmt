@@ -37,14 +37,18 @@ def read_vfiles(vfiles, labels):
         #    else vfile.split("/")[-3]
         with open(vfile, "r") as validf:
             steps = {}
-            for line in validf:
+            last_key = float('Inf')
+            for line in reversed(list(validf)):
                 entries = line.strip().split()
                 key = int(entries[1])
+                if key > last_key:
+                    break
                 steps[key] = {}
                 for i in range(2, len(entries)-1, 2):
                     name = entries[i].strip(":")
                     value = float(entries[i+1])
                     steps[key][name] = value
+                last_key = key
         models[model_name] = steps
     return models
 
@@ -105,7 +109,8 @@ def plot_models(models, x_value, y_value, output_path, plot_sup, lim_x):
         assert len(xs) == len(ys)
         y_maxes.append(max(ys))
         x_maxes.append(max(xs))
-        x_mins.append(min(xs))
+        if min(xs) > 0:
+            x_mins.append(min(xs))
 
         #f.plot(xs, ys)
         ax.plot(xs, ys, label=model_name, markevery=[0, -1])
