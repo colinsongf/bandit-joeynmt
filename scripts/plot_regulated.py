@@ -16,10 +16,11 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 import argparse
 import numpy as np
-
-plt.rcParams['axes.prop_cycle'] = ("cycler('color', 'rgbkm') * cycler('linestyle', ['-', '--', ':', '-.'])")
+#print(plt.rcParams['axes.prop_cycle'])
+#plt.rcParams['axes.prop_cycle'] = ("cycler('color', 'rgbkm') * cycler('linestyle', ['-', '--', ':', '-.'])")
                                    #" cycler('lw', [1, 2, 3, 4])")
-
+plt.rcParams['axes.prop_cycle'] = ("cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']) \
+ + cycler('marker', ['o', 'v', '^', '<', '>', 's', 'D', 'h', '*', '+'])")
 
 def read_vfiles(vfiles, labels):
     """
@@ -48,7 +49,7 @@ def read_vfiles(vfiles, labels):
     return models
 
 
-def plot_models(models, x_value, y_value, output_path, plot_sup):
+def plot_models(models, x_value, y_value, output_path, plot_sup, lim_x):
     """
     Plot the learning curves for several models
     :param models:
@@ -62,9 +63,9 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
     #                       figsize=(3*len(models), 3*len(plot_values)))
     #axes = np.array(axes).reshape((len(plot_values), len(models)))
 
-    print("model names", models.keys())
-    print("X value: {}".format(x_value))
-    print("Y value: {}".format(y_value))
+    #print("model names", models.keys())
+    #print("X value: {}".format(x_value))
+    #print("Y value: {}".format(y_value))
     f = plt.figure()
 
     if plot_sup:
@@ -84,7 +85,7 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
         sup_ys = {"weak": [], "full": [], "none": [], "self": []}
         for step in sorted(models[model_name]):
             logged_values = models[model_name][step]
-            print(logged_values)
+            #print(logged_values)
             if x_value == "time":
                 xs.append(step)
             elif x_value == "Total_Cost":
@@ -97,9 +98,9 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
                     sup_ys["weak"].append(logged_values["%weak_sup"])
                     sup_ys["none"].append(logged_values["%no_sup"])
                     sup_ys["self"].append(logged_values["%self_sup"])
-        print("XS", xs)
-        print("YS", ys)
-        print("sUP YS", sup_ys)
+        #print("XS", xs)
+        #print("YS", ys)
+        #print("sUP YS", sup_ys)
         xs = [x_i - xs[0] for x_i in xs]
         assert len(xs) == len(ys)
         y_maxes.append(max(ys))
@@ -107,7 +108,7 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
         x_mins.append(min(xs))
 
         #f.plot(xs, ys)
-        ax.plot(xs, ys, label=model_name)
+        ax.plot(xs, ys, label=model_name, markevery=[0, -1])
         if plot_sup:
             ax_sup.bar(xs, sup_ys["none"], label="none")
             ax_sup.bar(xs, sup_ys["self"], bottom=sup_ys["none"], label="self")
@@ -115,7 +116,8 @@ def plot_models(models, x_value, y_value, output_path, plot_sup):
             ax_sup.bar(xs, sup_ys["full"], bottom=np.array(sup_ys["none"])+np.array(sup_ys["self"])+np.array(sup_ys["weak"]),label="full")
 
     #ax.set_ylim()
-    ax.set_xlim(min(x_mins), min(x_maxes))
+    if lim_x:
+        ax.set_xlim(min(x_mins), min(x_maxes))
     ax.set_ylabel("BLEU" if y_value=="MT-bleu" else y_value)
     ax.set_xlabel("Cumulative Cost" if x_value=="Total_Cost" else "Iterations")
     #f.show()
@@ -165,10 +167,11 @@ if __name__ == "__main__":
     parser.add_argument("--plot_sup", action="store_true")
     parser.add_argument("--output_path", type=str, default="plot.pdf",
                         help="Plot will be stored in this location.")
+    parser.add_argument("--lim_x", action="store_true")
     args = parser.parse_args()
 
     vfiles = [m+"/validations.txt" for m in args.model_dirs]
 
     models = read_vfiles(vfiles, labels=args.labels)
 
-    plot_models(models, x_value=args.x_value, y_value=args.y_value, output_path=args.output_path, plot_sup=args.plot_sup)
+    plot_models(models, x_value=args.x_value, y_value=args.y_value, output_path=args.output_path, plot_sup=args.plot_sup, lim_x=args.lim_x)
