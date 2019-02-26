@@ -3,6 +3,7 @@ name: "reverse_experiment"
 data:
     src: "src"
     trg: "trg"
+    hyp: "hyp"
     train: "test/data/reverse/train"
     dev: "test/data/reverse/dev"
     test: "test/data/reverse/test"
@@ -47,10 +48,10 @@ training:
     max_output_length: 11
     print_valid_sents: 3
     loss_weights: {"mt": 1.0, "regulator": 1.0}
-    load_model: "reverse/1000.ckpt"
+   # load_model: "reverse/1000.ckpt"
     baseline: "first"  # mean, first, previous, False  # baseline reward for regulator
     weak_baseline: True
-    search: "beam"
+    weak_search: "offline"
     entropy_regularizer: 0.1  # encourage exploration
     budget: 5000
     cost_weight: 0.9
