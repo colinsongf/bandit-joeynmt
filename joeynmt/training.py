@@ -910,7 +910,6 @@ class TrainManager:
 #                        if v.grad is not None and torch.norm(v.grad) > 0])
 
         # only update MT params
-
         if self.clip_grad_fun is not None:
             # clip gradients (in-place)
             self.clip_grad_fun(params=self.model.parameters())
@@ -971,7 +970,7 @@ class TrainManager:
         self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
         self.logger.info("PREDS: {}".format(regulator_pred))
         self.logger.info("LOSSES: {}".format(losses))
-        self.logger.info("SOFTMAX LOSSES: {}".format(F.softmax(losses)))
+        self.logger.info("NORM LOSSES: {}".format(losses/losses.sum()))
         #trade_off = reward - self.cost_weight*costs
         #trade_off = reward / (costs+1)
         #self.logger.debug("trade_off: {}".format(trade_off))
@@ -1013,7 +1012,7 @@ class TrainManager:
                 self.model.costs_per_output[i].append(c)
 
         if weighted_reward:
-            trade_off = costs.new([reward * 100])*F.softmax(losses).detach() / (costs +1)
+            trade_off = costs.new([reward * 100])*losses/losses.sum().detach() / (costs +1)
             self.logger.info("weighted trade-off {}".format(trade_off))
         else:
             trade_off = costs.new([reward * 100]) / (costs + 1)
