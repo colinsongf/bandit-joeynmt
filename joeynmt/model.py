@@ -809,7 +809,10 @@ class Model(nn.Module):
     def _full_sup_loss(self, selection, decoder_out, criterion, target,
                        batch_src_mask, max_output_length, encoder_hidden,
                        encoder_out, level,
-                       beam_size=10, beam_alpha=1.0, logger=None, pe_ratio=1.0):
+                       beam_size=10, beam_alpha=1.0, logger=None, pe_ratio=1.0,
+                       hyps=None,
+                       hyp_inputs=None,
+                       hyp_masks=None):
         """
         Compute the loss for fully-supervised training for the given, selection
         of indices of the batch
@@ -839,17 +842,33 @@ class Model(nn.Module):
             input=tf_log_probs.contiguous().view(-1, tf_log_probs.size(-1)),
             target=selected_target.contiguous().view(-1)).view(selected_batch_size, -1).sum(-1)
 
-        # decode
-        # post-edit: reference
-        # hyp: beam search
-        selected_output, _ = \
-            beam_search(size=beam_size, encoder_output=selected_encoder_out,
-                        encoder_hidden=selected_encoder_hidden,
-                        src_mask=selected_src_mask, embed=self.trg_embed,
-                        max_output_length=max_output_length,
-                        alpha=beam_alpha, eos_index=self.eos_index,
-                        pad_index=self.pad_index, bos_index=self.bos_index,
-                        decoder=self.decoder)
+        if hyps is not None and hyp_inputs is not None and hyp_masks is not None:
+            # use logged hyp instead of bs output
+            selected_hyps = torch.index_select(hyps, index=selection, dim=0)
+            selected_hyp_inputs = torch.index_select(hyp_inputs,
+                                                     index=selection, dim=0)
+            selected_hyp_masks = torch.index_select(hyp_masks, index=selection,
+                                                    dim=0)
+            # logger.info("WEAK USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
+            # instead of sampling from the current model, take the log hypothesis
+            selected_output = selected_hyps
+            #sample_hyp_mask = selected_hyp_masks
+            #sample_hyp_inputs = selected_hyp_inputs
+            #sample_target = sample_hyp
+            #selected_tokens = sample_hyp_mask.sum().cpu().numpy()
+
+        else:
+            # decode
+            # post-edit: reference
+            # hyp: beam search
+            selected_output, _ = \
+                beam_search(size=beam_size, encoder_output=selected_encoder_out,
+                            encoder_hidden=selected_encoder_hidden,
+                            src_mask=selected_src_mask, embed=self.trg_embed,
+                            max_output_length=max_output_length,
+                            alpha=beam_alpha, eos_index=self.eos_index,
+                            pad_index=self.pad_index, bos_index=self.bos_index,
+                            decoder=self.decoder)
 
         join_char = " " if level in ["word", "bpe"] else ""
 
@@ -1265,7 +1284,10 @@ class Model(nn.Module):
                     encoder_hidden=encoder_hidden, level=level,
                     beam_size=beam_size, beam_alpha=beam_alpha,
                     encoder_out=encoder_out, max_output_length=max_output_length,
-                    batch_src_mask=batch.src_mask, logger=logger, pe_ratio=pe_ratio)
+                    batch_src_mask=batch.src_mask, logger=logger, pe_ratio=pe_ratio,
+                    hyps=batch.hyp if hasattr(batch, 'hyp') else None,
+                    hyp_inputs=batch.hyp_input if hasattr(batch, 'hyp_input') else None,
+                    hyp_masks=batch.hyp_mask if hasattr(batch, 'hyp_mask') else None)
                # print("full sup selected", full_sup_loss_selected)
                 batch_loss += full_sup_loss_selected
                 batch_tokens += tokens
