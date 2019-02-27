@@ -83,6 +83,11 @@ def plot_models(models, x_value, y_value, output_path, plot_sup, lim_x):
     x_maxes = []
     x_mins = []
 
+    # TODO
+    # find mins first
+    # then plot only until min to make marker at the end visible
+
+
     for col, model_name in enumerate(sorted(models)):
         xs = []
         ys = []
@@ -117,10 +122,25 @@ def plot_models(models, x_value, y_value, output_path, plot_sup, lim_x):
         #f.plot(xs, ys)
         ax.plot(xs, ys, label=model_name, markevery=[0, -1])
         if plot_sup:
-            ax_sup.bar(xs, sup_ys["none"], label="none")
-            ax_sup.bar(xs, sup_ys["self"], bottom=sup_ys["none"], label="self")
-            ax_sup.bar(xs, sup_ys["weak"], bottom=np.array(sup_ys["none"])+np.array(sup_ys["self"]),label="weak")
-            ax_sup.bar(xs, sup_ys["full"], bottom=np.array(sup_ys["none"])+np.array(sup_ys["self"])+np.array(sup_ys["weak"]),label="full")
+            bottom = None
+            if sum(sup_ys["none"]) > 0:
+                ax_sup.bar(xs, sup_ys["none"], label="none")
+                if bottom is None:
+                    bottom = np.array(sup_ys["none"])
+            if sum(sup_ys["self"]) > 0:
+                ax_sup.bar(xs, sup_ys["self"], bottom=bottom, label="self")
+                if bottom is None:
+                    bottom = np.array(sup_ys["self"])
+                else:
+                    bottom += np.array(sup_ys["self"])
+            if sum(sup_ys["weak"]) > 0:
+                ax_sup.bar(xs, sup_ys["weak"], bottom=bottom, label="weak")
+                if bottom is None:
+                    bottom = np.array(sup_ys["weak"])
+                else:
+                    bottom += np.array(sup_ys["weak"])
+            if sum(sup_ys["full"]) > 0:
+                ax_sup.bar(xs, sup_ys["full"], bottom=bottom,label="full")
 
     #ax.set_ylim()
     if lim_x:
