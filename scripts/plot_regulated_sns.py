@@ -8,11 +8,12 @@
 # plot time against BLEU
 
 # coding: utf-8
+import matplotlib
+matplotlib.use('Agg')
+
 import seaborn as sns
 import pandas as pd
 
-import matplotlib
-matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
