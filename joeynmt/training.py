@@ -10,6 +10,7 @@ import random
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from joeynmt.model import build_model
 
@@ -272,6 +273,8 @@ class TrainManager:
         self.logger.info("Attention drop for self-training: p={}".format(self.attention_drop))
         self.epsilon = train_config.get("epsilon", None)
         self.logger.info("Epsilon for epsilon-greedy: {}".format(self.epsilon))
+        self.weighted_reward = train_config.get("weighted_reward", False)
+        self.logger.info("Using loss-weighted reward: {}".format(self.weighted_reward))
 
     def save_checkpoint(self):
         """
@@ -550,7 +553,7 @@ class TrainManager:
                     only_sup = self.model.regulator.label2index.get(self.only_sup, self.only_sup)
                 else:
                     only_sup = False
-                batch_loss, reg_log_probs, reg_pred, costs = \
+                batch_loss, reg_log_probs, reg_pred, costs, individual_losses = \
                     self._train_batch_mt(batch, update=update, pred=only_sup)
 
                 def _log_reg(batch, reg_pred, costs):
@@ -672,13 +675,16 @@ class TrainManager:
                         assert len(all_reg_preds) == self.batch_multiplier
                         assert len(batch_costs) == self.batch_multiplier
 
+                        # TODO only works without batch_multiplier
                         reg_batch_loss, entropy = \
                             self._train_batch_regulator(
                                 regulator_log_probs=torch.cat(all_reg_log_probs, 0),
                                 regulator_pred=torch.cat(all_reg_preds, 0),
-                                reward=reward, update=update, costs=all_costs)
+                                reward=reward, update=update, costs=all_costs,
+                                losses=individual_losses,
+                                weighted_reward=self.weighted_reward)
                         batch_costs = []
-                        # TODO this is not exact
+                        # this is not exact
                         #if self.budget < 0:
                         #    self.stop = True
                         #    self.logger.info("Training ended since budget is consumed.")
@@ -854,7 +860,7 @@ class TrainManager:
         """
         # only run regulator if its loss is > 0
         batch_loss, regulator_log_probs, regulator_pred, batch_tokens, batch_seqs, \
-            batch_costs = self.model.get_loss_for_batch(
+            batch_costs, individual_losses = self.model.get_loss_for_batch(
                         batch=batch, criterion=self.criterion,
                         regulate=self.loss_weights["regulator"] > 0 and
                                  self.model.regulator is not None,
@@ -932,9 +938,9 @@ class TrainManager:
         # increment token counter
         self.total_tokens += batch.ntokens
 
-        return norm_batch_loss, regulator_log_probs, regulator_pred, batch_costs
+        return norm_batch_loss, regulator_log_probs, regulator_pred, batch_costs, individual_losses
 
-    def _train_batch_regulator(self, regulator_log_probs, regulator_pred, reward, costs, update=True):
+    def _train_batch_regulator(self, regulator_log_probs, regulator_pred, reward, costs, update=True, losses=None, weighted_reward=False):
         # regulator_log_prob*(reward-cost)
         # compute cost
        # costs = self.model.regulator.get_costs(regulator_pred.detach().cpu().numpy(), hyps=, refs=)
@@ -962,6 +968,8 @@ class TrainManager:
         # improvement in reward per increase in cost -> (r-r_prev) / cost
         self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
         self.logger.info("PREDS: {}".format(regulator_pred))
+        self.logger.info("LOSSES: {}".format(losses))
+        self.logger.info("SOFTMAX LOSSES: {}".format(F.softmax(losses)))
         #trade_off = reward - self.cost_weight*costs
         #trade_off = reward / (costs+1)
         #self.logger.debug("trade_off: {}".format(trade_off))
@@ -1002,13 +1010,18 @@ class TrainManager:
                 self.model.rewards_per_output[i].append(reward * 100)
                 self.model.costs_per_output[i].append(c)
 
-        trade_off = costs.new([reward*100]) / (costs+1)
+        if weighted_reward:
+            trade_off = costs.new([reward * 100])*F.softmax(losses).detach() / (costs +1)
+            self.logger.info("weighted trade-off {}".format(trade_off))
+        else:
+            trade_off = costs.new([reward * 100]) / (costs + 1)
+            self.logger.info("trade_off: {}".format(trade_off))
+
         if self.entropy_regularizer > 0:
             entropy_penalty = self.entropy_regularizer*-nll - self.entropy_regularizer
             self.logger.info("entropy penalty {}".format(entropy_penalty))
             trade_off -= entropy_penalty
 
-        self.logger.debug("trade_off: {}".format(trade_off))
         # baseline does not include cost
         #self.rewards.append(reward)
         #self.logger.info(nll)

@@ -1209,6 +1209,7 @@ class Model(nn.Module):
             batch_tokens = 0
             batch_seqs = 0
             batch_costs = regulator_out.new_zeros(batch_size)
+            individual_losses = regulator_out.new_zeros(batch_size)
 
             # split up the batch and sum the individual losses
             none_index = self.regulator.label2index.get("none", -1)
@@ -1250,6 +1251,7 @@ class Model(nn.Module):
                 batch_tokens += tokens
                 batch_seqs += seqs
                 # no cost
+                individual_losses[ones_idx] = self_sup_loss_selected
 
             if weak_index in reg_pred:
                 # compute weak-sup. loss for those
@@ -1273,6 +1275,7 @@ class Model(nn.Module):
                 # get cost: number of words that need to be marked (incorrect)
                 # write at the right position of cost vector
                 batch_costs[twos_idx] = batch_costs.new(costs)
+                individual_losses[twos_idx] = weak_sup_loss_selected
 
             if full_index in reg_pred:
                 # compute fully-sup. loss for those
@@ -1295,6 +1298,7 @@ class Model(nn.Module):
                 # get cost: # edits needed in hyp
                 # write at the right position of cost vector
                 batch_costs[threes_idx] = batch_costs.new(costs)
+                individual_losses[threes_idx] = full_sup_loss_selected
 
                 selected_srcs = torch.index_select(batch.src, dim=0,
                                                    index=threes_idx)
@@ -1310,9 +1314,8 @@ class Model(nn.Module):
             if type(batch_loss) == int:  # no update for batch
                 batch_loss = None
 
-       # print("TOTAL COST", batch_costs)
         return batch_loss, reg_log_probs, reg_pred, batch_tokens, batch_seqs, \
-               batch_costs
+               batch_costs, individual_losses
 
     def run_batch(self, batch, max_output_length, beam_size, beam_alpha):
         """
