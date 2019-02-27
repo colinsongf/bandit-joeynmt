@@ -891,7 +891,7 @@ class TrainManager:
                         beam_alpha=self.beam_alpha,
                         self_attention_drop=self.attention_drop,
                         epsilon=self.epsilon,
-                        regulator_sample=self.loss_weights["regulator"] > 0.0)
+                        regulator_sample=True)#self.loss_weights["regulator"] > 0.0)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
@@ -1140,16 +1140,16 @@ class TrainManager:
             self.steps, valid_loss, valid_ppl, eval_metric,
             valid_score, eval_metric, valid_score)
 
-        if self.loss_weights["regulator"] > 0:
-            # add statistics
-            report_str += "\t Avg_Reward: {}".format(np.mean(self.rewards) if len(self.rewards) > 1 else 0)
-            report_str += "\t Total_Cost: {}".format(self.total_cost)
-            current_reg_out = self.regulator_outputs[-self.batch_size:]
-            total = self.batch_size
-            report_str += "\t %no_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("none", -1))/total*100)
-            report_str += "\t %self_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("self", -1))/total*100)
-            report_str += "\t %weak_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("weak", -1))/total*100)
-            report_str += "\t %full_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("full", -1))/total*100)
+        #if self.loss_weights["regulator"] > 0:
+        # add statistics
+        report_str += "\t Avg_Reward: {}".format(np.mean(self.rewards) if len(self.rewards) > 1 else 0)
+        report_str += "\t Total_Cost: {}".format(self.total_cost)
+        current_reg_out = self.regulator_outputs[-self.batch_size:]
+        total = self.batch_size
+        report_str += "\t %no_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("none", -1))/total*100)
+        report_str += "\t %self_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("self", -1))/total*100)
+        report_str += "\t %weak_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("weak", -1))/total*100)
+        report_str += "\t %full_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("full", -1))/total*100)
         # at the end add * and lr
         lr_str = ""
         if type(current_lr) is dict:
