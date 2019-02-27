@@ -231,7 +231,7 @@ class TrainManager:
         if "load_model" in train_config.keys():
             model_load_path = train_config["load_model"]
             self.logger.info("Loading model from {}".format(model_load_path))
-            self.load_checkpoint(model_load_path)
+            self.load_checkpoint(model_load_path, regulator_path=train_config.get("load_regulator", None))
 
         trainable_params = [n for (n, p) in self.model.named_parameters()
                             if p.requires_grad]
@@ -303,7 +303,7 @@ class TrainManager:
 
         torch.save(state, model_path)
 
-    def load_checkpoint(self, path):
+    def load_checkpoint(self, path, regulator_path=None):
         """
         Load a model from a given checkpoint file.
 
@@ -322,9 +322,20 @@ class TrainManager:
         param_dict = model_checkpoint["model_state"]
 
         if self.model.regulator is not None:
+            if regulator_path is not None:
+                self.logger.info("Loading regulator from {}".format(regulator_path))
+                reg_model_checkpoint = load_model_from_checkpoint(
+                    path=regulator_path, use_cuda=self.use_cuda)
+                reg_param_dict = reg_model_checkpoint["model_state"]
+            else:
+                reg_param_dict = param_dict
+                reg_model_checkpoint = model_checkpoint
+
             new_param_dict = {}
             curr_state_dict = self.model.state_dict()
-            for name, param in param_dict.items():
+
+            # load regulator params from specific checkpoint
+            for name, param in reg_param_dict.items():
                 # if regulator params are different shape or don't exist: initialize newly
                 if "reg" in name:
                     # regulator param
@@ -357,7 +368,10 @@ class TrainManager:
 
                     else:
                         new_param_dict[name] = param
-                else:
+
+            # load other variables from standard model
+            for name, param in param_dict.items():
+                if "reg" not in name:
                     # standard loading
                     new_param_dict[name] = param
 
@@ -411,9 +425,9 @@ class TrainManager:
                 self.logger.info("Newly creating optimizer for MT.")
                 pass
             # now for regulator
-            if "regulator_optimizer_state" in model_checkpoint:
+            if "regulator_optimizer_state" in reg_model_checkpoint:
                 self.optimizer["regulator"].load_state_dict(
-                    model_checkpoint["regulator_optimizer_state"])
+                    reg_model_checkpoint["regulator_optimizer_state"])
             else:  # doesn't have any (newly created)
                 self.logger.info("Newly creating optimizer for regulator.")
                 pass
@@ -451,9 +465,9 @@ class TrainManager:
             else:
                 self.logger.info("Newly creating scheduler for MT.")
                 pass
-            if "regulator_scheduler_state" in model_checkpoint:
+            if "regulator_scheduler_state" in reg_model_checkpoint:
                 self.scheduler["regulator"].load_state_dict(
-                    model_checkpoint["regulator_scheduler_state"])
+                    reg_model_checkpoint["regulator_scheduler_state"])
             else:
                 self.logger.info("Newly creating scheduler for regulator.")
                 pass
@@ -862,8 +876,7 @@ class TrainManager:
         batch_loss, regulator_log_probs, regulator_pred, batch_tokens, batch_seqs, \
             batch_costs, individual_losses = self.model.get_loss_for_batch(
                         batch=batch, criterion=self.criterion,
-                        regulate=self.loss_weights["regulator"] > 0 and
-                                 self.model.regulator is not None,
+                        regulate=self.model.regulator is not None,
                         pred=pred,
                         max_output_length=self.max_output_length,
                         chunk_type=self.chunk_type, level=self.level,
@@ -877,11 +890,12 @@ class TrainManager:
                         beam_size=self.beam_size,
                         beam_alpha=self.beam_alpha,
                         self_attention_drop=self.attention_drop,
-                        epsilon=self.epsilon)
+                        epsilon=self.epsilon,
+                        regulator_sample=self.loss_weights["regulator"] > 0.0)
 
         if batch_loss is None:
             # if no supervision is chosen for whole batch -> no cost
-            return None, regulator_log_probs, regulator_pred, regulator_pred.new(regulator_pred.size()).zero_().float()
+            return None, regulator_log_probs, regulator_pred, regulator_pred.new(regulator_pred.size()).zero_().float(), None
 
         # normalize batch loss
         # counts might be adapted since parts of batch are ignored through reg. choice

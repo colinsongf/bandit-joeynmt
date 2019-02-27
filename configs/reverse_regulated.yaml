@@ -47,8 +47,9 @@ training:
     use_cuda: False
     max_output_length: 11
     print_valid_sents: 3
-    loss_weights: {"mt": 1.0, "regulator": 1.0}
-   # load_model: "reverse/1000.ckpt"
+    loss_weights: {"mt": 1.0, "regulator": 0.0}
+    load_model: "reverse/1017.ckpt"
+    load_regulator: "reverse_new/1003.ckpt"
     baseline: "first"  # mean, first, previous, False  # baseline reward for regulator
     weak_baseline: True
     weak_search: "offline"
@@ -56,7 +57,7 @@ training:
     budget: 5000
     cost_weight: 0.9
     budgeted_cost: False
-    only_sup: "epsilon"
+    only_sup: False
     chunk_type: "sbleu"  # marking
     self_entropy: False # encourage high entropy for self-training
     weak_baseline: False

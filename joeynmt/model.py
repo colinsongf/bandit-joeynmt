@@ -1027,7 +1027,7 @@ class Model(nn.Module):
                            entropy=False, weak_search="sample", weak_baseline=True,
                            weak_temperature=1.0, logger=None, case_sensitive=True,
                            pe_ratio=1.0, beam_size=10, beam_alpha=1.,
-                           self_attention_drop=0.0, epsilon=0.5):
+                           self_attention_drop=0.0, epsilon=0.5, regulator_sample=False):
         """
         Compute non-normalized loss and number of tokens for a batch
 
@@ -1059,8 +1059,13 @@ class Model(nn.Module):
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
 
             # sample an output
-            reg_dist = Categorical(logits=regulator_out)
-            reg_pred = reg_dist.sample()
+            if regulator_sample:
+                reg_dist = Categorical(logits=regulator_out)
+                reg_pred = reg_dist.sample()
+            else:
+                reg_pred = torch.argmax(reg_log_probs, dim=-1)
+                logger.info("GREEDY OPTION {}".format(reg_pred))
+                logger.info("log probs {}".format(reg_log_probs))
 
             # heuristic: always choose one type of supervision
             if pred is not False:
@@ -1195,8 +1200,6 @@ class Model(nn.Module):
                         fill_value[i] = self.regulator.label2index[label]
                     reg_pred = torch.from_numpy(fill_value).to(
                         regulator_out.device).long()
-                    print(reg_pred)
-
 
                 else:
                     fill_value = pred
