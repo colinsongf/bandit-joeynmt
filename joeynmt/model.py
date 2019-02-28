@@ -1182,22 +1182,30 @@ class Model(nn.Module):
                     #print("entropy", avg_sample_entropy)
 
                     self.entropies.extend(avg_sample_entropy)
-                    okay = np.percentile(a=self.entropies, q=50, axis=0)
-                    good = np.percentile(a=self.entropies, q=15, axis=0)
-                    very_good = np.percentile(a=self.entropies, q=5, axis=0)
+                    #okay = np.percentile(a=self.entropies, q=50, axis=0)
+                    #good = np.percentile(a=self.entropies, q=15, axis=0)
+                    #very_good = np.percentile(a=self.entropies, q=5, axis=0)
+                    uncertain = np.percentile(a=self.entropies, q=70, axis=0)
+                    certain = np.percentile(a=self.entropies, q=60, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
                     for i, ent in enumerate(avg_sample_entropy):
-                        if ent < very_good:
-                            # no supervision if very certain
-                            label = "none"
-                        elif ent < good:
-                            # self supervision when still certain
+                        if ent < certain:
                             label = "self"
-                        elif ent < okay:
-                            # weak supervision if not really certain
-                            label = "weak"
-                        else:  # full feedback if uncertain
+                        elif ent > uncertain:
                             label = "full"
+                        else:
+                            label = "weak"
+                        #if ent < very_good:
+                            # no supervision if very certain
+                        #    label = "none"
+                        #elif ent < good:
+                            # self supervision when still certain
+                        #    label = "self"
+                        #elif ent < okay:
+                            # weak supervision if not really certain
+                        #    label = "weak"
+                        #else:  # full feedback if uncertain
+                        #    label = "full"
                         fill_value[i] = self.regulator.label2index[label]
                     reg_pred = torch.from_numpy(fill_value).to(
                         regulator_out.device).long()
