@@ -1131,8 +1131,8 @@ class Model(nn.Module):
                     ters = ster(hypotheses=decoded_hyps, references=decoded_refs)
                     # collect all ters
                     self.ters.extend(ters)
-                    good = np.percentile(a=self.ters, q=50, axis=0)
-                    very_good = np.percentile(a=self.ters, q=95, axis=0)
+                    good = np.percentile(a=self.ters, q=30, axis=0)
+                    very_good = np.percentile(a=self.ters, q=40, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
                     for i, ter in enumerate(ters):
                         if ter > very_good:
