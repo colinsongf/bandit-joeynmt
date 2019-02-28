@@ -131,7 +131,16 @@ def plot_models(models, df, x_value, y_value, output_path, plot_sup, lim_x):
 
         #fmri = sns.load_dataset("fmri")
         #print(fmri)
-    ax = sns.lineplot(x=x_value, y=y_value, data=df, hue="type", style="type", legend="brief", ci="sd")
+    if x_value == "Total_Cost":
+        estimator = None
+        lw = 1
+        ci = None
+        units = "model"
+    else:
+        estimator = 'mean'
+        ci = "sd"
+        units = None
+    ax = sns.lineplot(x=x_value, y=y_value, data=df, hue="type", style="type", legend="brief", ci=ci, estimator=estimator, units=units)
         #ax = sns.lineplot(x=xs, y=ys, markers=None, labels=model_name)
 
         #f.plot(xs, ys)
