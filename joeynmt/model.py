@@ -1131,7 +1131,7 @@ class Model(nn.Module):
                     ters = ster(hypotheses=decoded_hyps, references=decoded_refs)
                     # collect all ters
                     self.ters.extend(ters)
-                    good = np.percentile(a=self.ters, q=30, axis=0)
+                    good = np.percentile(a=self.ters, q=20, axis=0)
                     very_good = np.percentile(a=self.ters, q=40, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
                     for i, ter in enumerate(ters):
@@ -1185,7 +1185,7 @@ class Model(nn.Module):
                     #okay = np.percentile(a=self.entropies, q=50, axis=0)
                     #good = np.percentile(a=self.entropies, q=15, axis=0)
                     #very_good = np.percentile(a=self.entropies, q=5, axis=0)
-                    uncertain = np.percentile(a=self.entropies, q=70, axis=0)
+                    uncertain = np.percentile(a=self.entropies, q=80, axis=0)
                     certain = np.percentile(a=self.entropies, q=60, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
                     for i, ent in enumerate(avg_sample_entropy):
