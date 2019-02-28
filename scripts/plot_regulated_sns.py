@@ -140,7 +140,8 @@ def plot_models(models, df, x_value, y_value, output_path, plot_sup, lim_x):
         estimator = 'mean'
         ci = 95
         units = None
-    ax = sns.lineplot(x=x_value, y=y_value, data=df, hue="type", style="type", legend="brief", ci=ci, estimator=estimator, units=units)
+        lw = 1.5
+    ax = sns.lineplot(x=x_value, y=y_value, data=df, hue="type", style="type", legend="brief", ci=ci, estimator=estimator, units=units, lw=lw)
         #ax = sns.lineplot(x=xs, y=ys, markers=None, labels=model_name)
 
         #f.plot(xs, ys)
