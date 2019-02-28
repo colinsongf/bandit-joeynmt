@@ -34,6 +34,7 @@ def read_vfiles(vfiles, labels, types):
     """
     df = pd.DataFrame(columns=["steps", "model", "type", "MT-bleu", "Loss", "Total_Cost"])
     models = {}
+    time0 = 0
     if labels is None:
         labels = vfiles
     for vfile, label, typ in zip(vfiles, labels, types):
@@ -51,6 +52,8 @@ def read_vfiles(vfiles, labels, types):
                     break
                 steps[key] = {}
                 row["time"] = key
+                if key < time0:
+                    time0 = key
                 for i in range(2, len(entries)-1, 2):
                     name = entries[i].strip(":")
                     value = float(entries[i+1])
@@ -61,6 +64,14 @@ def read_vfiles(vfiles, labels, types):
 
                 last_key = key
         models[model_name] = steps
+
+        print("TIME0", time0)
+
+        for i, row in df.iterrows():
+            row["time"] = row["time"]-time0+1
+            #print(row)
+            #print(row["time"])
+
     return models, df
 
 
