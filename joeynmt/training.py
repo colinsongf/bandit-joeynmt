@@ -275,6 +275,8 @@ class TrainManager:
         self.logger.info("Epsilon for epsilon-greedy: {}".format(self.epsilon))
         self.weighted_reward = train_config.get("weighted_reward", False)
         self.logger.info("Using loss-weighted reward: {}".format(self.weighted_reward))
+        self.no_cost = train_config.get("no_cost", False)
+        self.logger.info("Ignoring the cost: {}".format(self.no_cost))
 
     def save_checkpoint(self):
         """
@@ -955,6 +957,9 @@ class TrainManager:
         return norm_batch_loss, regulator_log_probs, regulator_pred, batch_costs, individual_losses
 
     def _train_batch_regulator(self, regulator_log_probs, regulator_pred, reward, costs, update=True, losses=None, weighted_reward=False):
+        if self.no_cost:
+            # ignore the costs
+            costs.zero_()
         # regulator_log_prob*(reward-cost)
         # compute cost
        # costs = self.model.regulator.get_costs(regulator_pred.detach().cpu().numpy(), hyps=, refs=)
