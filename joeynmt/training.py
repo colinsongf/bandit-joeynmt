@@ -610,10 +610,9 @@ class TrainManager:
                     all_costs = torch.cat(batch_costs, 0)
                     self.total_cost += all_costs.sum()
 
+                entropy = None
                 if reg_pred is not None:
                     self.regulator_outputs.extend(reg_pred.detach().cpu().numpy())
-                else:
-                    entropy = None
 
                 reg_batch_loss = None
                 if self.model.regulator is not None:
