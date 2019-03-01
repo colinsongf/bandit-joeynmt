@@ -174,15 +174,15 @@ class Model(nn.Module):
                             hidden=decoder_hidden,
                             attention_drop=attention_drop)
 
-    def regulate(self, src, src_length): #, hyp):
+    def regulate(self, src, src_length, hyp):
         """
 
         :param src:
         :param hyp:
         :return:
         """
-        return self.regulator(src=self.reg_src_embed(src), src_length=src_length)
-                            #  hyp=self.reg_trg_embed(hyp))
+        return self.regulator(src=self.reg_src_embed(src), src_length=src_length,
+                              hyp=self.reg_src_embed(hyp) if hyp is not None else None)
 
     # TODO split batch according to regulator prediction
     # then for each part of the batch compute parts
@@ -1055,8 +1055,42 @@ class Model(nn.Module):
 
         else:
             # with regulator
+
+            if self.regulator.feed_trg:
+                hyp, _ = beam_search(size=beam_size,
+                                            encoder_output=encoder_out,
+                                            encoder_hidden=encoder_hidden,
+                                            src_mask=batch.src_mask,
+                                            embed=self.trg_embed,
+                                            max_output_length=max_output_length,
+                                            alpha=beam_alpha,
+                                            eos_index=self.eos_index,
+                                            pad_index=self.pad_index,
+                                            bos_index=self.bos_index,
+                                            decoder=self.decoder)
+                hyp = batch.src.new(hyp).long()
+            else:
+                hyp = None
+            #bos_array = np.full(shape=(batch_size, 1),
+            #                    fill_value=self.bos_index)
+            # prepend bos but cut off one bos
+            #sample_hyp_pad_bos = np.concatenate((bos_array, bs_hyp),
+            #                                    axis=1)[:, :-1]
+            # print("with bos", bs_hyp_pad_bos)
+
+            # treat bs output as target for forced decoding to get log likelihood of bs output
+            #sample_out, _, _, _ = self.decode(
+            #    encoder_output=encoder_out,
+            #    encoder_hidden=encoder_hidden,
+            #    trg_input=batch.src_mask.new(
+            #        sample_hyp_pad_bos).long(),
+            #    src_mask=batch.src_mask,
+            #    unrol_steps=sample_hyp_pad_bos.shape[1])
+            #sample_log_probs = F.log_softmax(sample_out, dim=-1)
+
             regulator_out = self.regulate(batch.src,
-                                          batch.src_lengths)  # bs_target)
+                                          batch.src_lengths,
+                                          hyp=hyp)  # bs_target)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
 
             # sample an output

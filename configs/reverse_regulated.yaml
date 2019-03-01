@@ -21,7 +21,7 @@ testing:
 
 training:
     #load_model: "my_model/3300.params"
-    random_seed: 42
+    random_seed: 43
     optimizer: "adam"
     loss: "crossentropy"
     learning_rate: {"mt": 0.0001, "regulator": 0.003}
@@ -38,18 +38,18 @@ training:
     decrease_factor: 0.5
     schedule_after_loss: True
     epochs: 10
-    validation_freq: 500
+    validation_freq: 10
     logging_freq: 100
     eval_metric: "bleu"
-    model_dir: "reverse" #_regulated"
+    model_dir: "uncertainty" #_regulated"
     overwrite: True
     shuffle: True
     use_cuda: False
     max_output_length: 11
     print_valid_sents: 3
-    loss_weights: {"mt": 1.0, "regulator": 0.0}
-    load_model: "reverse/1017.ckpt"
-    load_regulator: "reverse_new/1003.ckpt"
+    loss_weights: {"mt": 1.0, "regulator": 1.0}
+    #load_model: "reverse/1017.ckpt"
+    #load_regulator: "reverse_new/1003.ckpt"
     baseline: "first"  # mean, first, previous, False  # baseline reward for regulator
     weak_baseline: True
     weak_search: "offline"
@@ -66,6 +66,7 @@ training:
     pe_ratio: 0.5
     epsilon: 0.5
     weighted_reward: True
+    no_cost: True
 
 model:
     initializer: "xavier"
@@ -97,13 +98,14 @@ model:
         attention: "bahdanau"
     regulator:
         type: "lstm"
+        feed_trg: True
         embeddings:
             embedding_dim: 16
             scale: False
         hidden_size: 63
         middle_size: 31
         dropout: 0.1
-        output_labels: ["none", "self", "weak", "full"]
+        output_labels: ["self", "weak", "full"]
         #["none", "self", "weak", "full"]
         num_layers: 2
         bidirectional: True

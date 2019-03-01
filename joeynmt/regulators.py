@@ -38,6 +38,7 @@ class RecurrentRegulator(Regulator):
                  num_layers,
                  bidirectional,
                  dropout,
+                 feed_trg=False,
                  **kwargs):
         # mapping output indices to labels
         self.index2label = dict(enumerate(output_labels))
@@ -70,8 +71,9 @@ class RecurrentRegulator(Regulator):
                       #  self.trg_rnn.hidden_size*(2 if bidirectional else 1),
             out_features=self.output_size
         )
+        self.feed_trg = feed_trg
 
-    def forward(self, src, src_length): #, hyp):
+    def forward(self, src, src_length, hyp=None):
         """
         Read src with Bi-RNNs, take last hidden states and combine
         :param src:
@@ -103,11 +105,36 @@ class RecurrentRegulator(Regulator):
         fwd_hidden_last = hidden_layerwise[-1:, 0]
         bwd_hidden_last = hidden_layerwise[-1:, 1]
 
-        # only feed the final state of the top-most layer to the decoder
+        # final state of the top-most layer
         hidden_concat = torch.cat(
             [fwd_hidden_last, bwd_hidden_last], dim=2).squeeze(0)
 
-        middle = torch.tanh(self.middle_layer(hidden_concat))
+        if self.feed_trg and hyp is not None:
+            # also read in hyps (with same params)
+            # but they are not sorted
+            hyp_embedded = self.rnn_input_dropout(hyp)
+            output_hyp, hidden_hyp = self.src_rnn(hyp_embedded)
+            #print("output hyp", output_hyp.shape)  # batch x length x 2*rnn_size
+            if isinstance(hidden_hyp, tuple):
+                hidden_hyp, memory_cell_hyp = hidden_hyp
+            #print("hidden hyp", hidden_hyp.shape)  # 4 x batch x rnn_size
+
+            hidden_layerwise_hyp = hidden.view(self.src_rnn.num_layers,
+                                           2 if self.src_rnn.bidirectional else 1,
+                                           batch_size, self.src_rnn.hidden_size)
+            #print("hidden hyp", hidden_layerwise_hyp.shape)  # layers x directions x batch x rnn_size
+            fwd_hidden_last_hyp = hidden_layerwise_hyp[-1:, 0]
+            bwd_hidden_last_hyp = hidden_layerwise_hyp[-1:, 1]
+
+            # final state of the top-most layer
+            hidden_concat_hyp = torch.cat(
+                [fwd_hidden_last_hyp, bwd_hidden_last_hyp], dim=2).squeeze(0)
+
+            input_to_middle = hidden_concat*hidden_concat_hyp
+        else:
+            input_to_middle = hidden_concat
+
+        middle = torch.tanh(self.middle_layer(input_to_middle))
 
         # TODO activation function?
         output = self.output_layer(middle)

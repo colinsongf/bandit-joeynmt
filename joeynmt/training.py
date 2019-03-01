@@ -277,6 +277,8 @@ class TrainManager:
         self.logger.info("Using loss-weighted reward: {}".format(self.weighted_reward))
         self.no_cost = train_config.get("no_cost", False)
         self.logger.info("Ignoring the cost: {}".format(self.no_cost))
+        if self.model.regulator is not None:
+            self.logger.info("Feeding trg to regulator: {}".format(self.model.regulator.feed_trg))
 
     def save_checkpoint(self):
         """
