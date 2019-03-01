@@ -112,7 +112,7 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
         self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
         self.rewards = []
-        self.ters = []
+        self.bleus = []
         self.entropies = []
         if self.regulator is not None:
             self.rewards_per_output = {i: [] for i in self.regulator.index2label.keys()}
@@ -1162,13 +1162,17 @@ class Model(nn.Module):
                                                 decoder=self.decoder)
                     decoded_hyps = arrays_to_sentences(sample_hyp, vocabulary=self.trg_vocab)
                     decoded_refs = arrays_to_sentences(batch.trg, vocabulary=self.trg_vocab)
-                    ters = ster(hypotheses=decoded_hyps, references=decoded_refs)
+                    if level == "bpe":
+                        decoded_hyps = [d.replace("@@ ", "") for d in decoded_hyps]
+                    join_char = "" if level == "char" else " "
+                    bleus = sbleu(hypotheses=[join_char.join(d) for d in decoded_hyps],
+                                  references=[join_char.join(r) for r in decoded_refs])
                     # collect all ters
-                    self.ters.extend(ters)
-                    good = np.percentile(a=self.ters, q=20, axis=0)
-                    very_good = np.percentile(a=self.ters, q=40, axis=0)
+                    self.bleus.extend(bleus)
+                    good = np.percentile(a=self.bleus, q=20, axis=0)
+                    very_good = np.percentile(a=self.bleus, q=40, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
-                    for i, ter in enumerate(ters):
+                    for i, ter in enumerate(bleus):
                         if ter > very_good:
                             # self-supervision
                             label = "self"
