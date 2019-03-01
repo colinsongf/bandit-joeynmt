@@ -1153,10 +1153,11 @@ class TrainManager:
         report_str += "\t Total_Cost: {}".format(self.total_cost)
         current_reg_out = self.regulator_outputs[-self.batch_size:]
         total = self.batch_size
-        report_str += "\t %no_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("none", -1))/total*100)
-        report_str += "\t %self_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("self", -1))/total*100)
-        report_str += "\t %weak_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("weak", -1))/total*100)
-        report_str += "\t %full_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("full", -1))/total*100)
+        if self.model.regulator is not None:
+            report_str += "\t %no_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("none", -1))/total*100)
+            report_str += "\t %self_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("self", -1))/total*100)
+            report_str += "\t %weak_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("weak", -1))/total*100)
+            report_str += "\t %full_sup: {:.2f}".format(current_reg_out.count(self.model.regulator.label2index.get("full", -1))/total*100)
         # at the end add * and lr
         lr_str = ""
         if type(current_lr) is dict:
