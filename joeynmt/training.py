@@ -990,8 +990,9 @@ class TrainManager:
         # improvement in reward per increase in cost -> (r-r_prev) / cost
         self.logger.info("COST: {}, REWARD: {}".format(costs, reward))
         self.logger.info("PREDS: {}".format(regulator_pred))
-        self.logger.info("LOSSES: {}".format(losses))
-        self.logger.info("NORM LOSSES: {}".format(losses/losses.sum()))
+        if losses is not None:
+            self.logger.info("LOSSES: {}".format(losses))
+            self.logger.info("NORM LOSSES: {}".format(losses/losses.sum()))
         #trade_off = reward - self.cost_weight*costs
         #trade_off = reward / (costs+1)
         #self.logger.debug("trade_off: {}".format(trade_off))
