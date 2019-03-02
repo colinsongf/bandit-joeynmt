@@ -1144,6 +1144,25 @@ class Model(nn.Module):
                     reg_pred = torch.from_numpy(
                         np.full(shape=(batch_size), fill_value=fill_value)).to(
                         regulator_out.device).long()
+                elif pred == "epsilon-batch":
+                    # epsilon-greedy
+                    # draw random number between 0 and 1
+                    exploit = np.random.uniform(low=0.0, high=1.0) > epsilon
+                    reg_pred = np.zeros(shape=(batch_size))
+                    # if larger than epsilon: pick best action so far
+                    if exploit:
+                        #print("REWARD STATS",self.rewards_per_output)
+                        #print("COST STATS", self.costs_per_output)
+                        stats = [np.mean(np.array(self.rewards_per_output[i])-np.array(self.costs_per_output[i])) if len(self.rewards_per_output[i]) > 0 else 0 for i in range(self.regulator.output_size)]
+                        #print("EXPLOIT", stats, np.argmax(stats))
+                        fill_value = np.argmax(stats)
+                    # otherwise: pick one uniformly
+                    else:
+                        #print("EXPLORE")
+                        fill_value = np.random.randint(0, high=self.regulator.output_size)
+                    reg_pred = torch.from_numpy(
+                        np.full(shape=(batch_size), fill_value=fill_value)).to(
+                        regulator_out.device).long()
                 elif pred == "user":
                     # choose according to HTER: TODO never none
                     # if perfect: do self-training
