@@ -130,7 +130,7 @@ class RecurrentRegulator(Regulator):
             hidden_concat_hyp = torch.cat(
                 [fwd_hidden_last_hyp, bwd_hidden_last_hyp], dim=2).squeeze(0)
 
-            input_to_middle = hidden_concat*hidden_concat_hyp
+            input_to_middle = hidden_concat+hidden_concat_hyp
         else:
             input_to_middle = hidden_concat
 
