@@ -586,21 +586,30 @@ class TrainManager:
                     # write to file:
                     # step, batch_src, batch_trg, batch_hyp, ter, sbleu, reg_pred, reg_logprob, cost
                     join_char = "" if self.level == "char" else " "
-                    for src, trg, hyp, reg, logp, cost in zip(batch.src, batch.trg, batch.hyp, reg_pred.detach().cpu().numpy(), reg_log_probs, costs):
-                        src = join_char.join(array_to_sentence(src, self.model.src_vocab))
-                        trg = join_char.join(array_to_sentence(trg, self.model.trg_vocab))
-                        hyp = join_char.join(array_to_sentence(hyp, self.model.trg_vocab))
-                        if self.level == "bpe":
-                            hyp_for_eval = hyp.replace("@@ ", "")
-                            trg_for_eval = trg.replace("@@ ", "")
-                        else:
-                            hyp_for_eval = hyp
-                            trg_for_eval = trg
-                        bleu = sbleu([hyp_for_eval], [trg_for_eval])[0]
-                        ter = ster([hyp_for_eval.split(join_char)], [trg_for_eval.split(join_char)])[0]
-                        action = self.model.regulator.index2label[reg]
-                        line = "{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{}\t{:4f}\t{}\n".format(self.steps, src, trg, hyp, bleu, ter, action, logp[reg].detach().cpu().numpy(), cost)
-                        self.log_reg_file.write(line)
+                    if hasattr(batch, "hyp"):
+                        for src, trg, hyp, reg, logp, cost in zip(batch.src, batch.trg, batch.hyp, reg_pred.detach().cpu().numpy(), reg_log_probs, costs):
+                            src = join_char.join(array_to_sentence(src, self.model.src_vocab))
+                            trg = join_char.join(array_to_sentence(trg, self.model.trg_vocab))
+                            hyp = join_char.join(array_to_sentence(hyp, self.model.trg_vocab))
+                            if self.level == "bpe":
+                                hyp_for_eval = hyp.replace("@@ ", "")
+                                trg_for_eval = trg.replace("@@ ", "")
+                            else:
+                                hyp_for_eval = hyp
+                                trg_for_eval = trg
+                            bleu = sbleu([hyp_for_eval], [trg_for_eval])[0]
+                            ter = ster([hyp_for_eval.split(join_char)], [trg_for_eval.split(join_char)])[0]
+                            action = self.model.regulator.index2label[reg]
+                            line = "{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{}\t{:4f}\t{}\n".format(self.steps, src, trg, hyp, bleu, ter, action, logp[reg].detach().cpu().numpy(), cost)
+                            self.log_reg_file.write(line)
+                    else:
+                        for src, trg, reg, logp, cost in zip(batch.src, batch.trg, reg_pred.detach().cpu().numpy(), reg_log_probs, costs):
+                            src = join_char.join(array_to_sentence(src, self.model.src_vocab))
+                            trg = join_char.join(array_to_sentence(trg, self.model.trg_vocab))
+                            action = self.model.regulator.index2label[reg]
+                            line = "{}\t{}\t{}\t{}\t{:4f}\t{}\n".format(self.steps, src, trg, action, logp[reg].detach().cpu().numpy(), cost)
+                            self.log_reg_file.write(line)
+
                     self.log_reg_file.flush()
 
                 if self.log_reg_file is not None:
