@@ -1181,15 +1181,15 @@ class Model(nn.Module):
                                                 decoder=self.decoder)
                     decoded_hyps = arrays_to_sentences(sample_hyp, vocabulary=self.trg_vocab)
                     decoded_refs = arrays_to_sentences(batch.trg, vocabulary=self.trg_vocab)
-                    if level == "bpe":
-                        decoded_hyps = [d.replace("@@ ", "") for d in decoded_hyps]
+                    #if level == "bpe":
+                    #    decoded_hyps = [d.replace("@@ ", "") for d in decoded_hyps]
                     join_char = "" if level == "char" else " "
-                    bleus = sbleu(hypotheses=[join_char.join(d) for d in decoded_hyps],
-                                  references=[join_char.join(r) for r in decoded_refs])
+                    bleus = sbleu(hypotheses=[join_char.join(d).replace("@@ ", "") for d in decoded_hyps],
+                                  references=[join_char.join(r).replace("@@ ", "") for r in decoded_refs])
                     # collect all ters
                     self.bleus.extend(bleus)
-                    good = np.percentile(a=self.bleus, q=20, axis=0)
-                    very_good = np.percentile(a=self.bleus, q=40, axis=0)
+                    good = np.percentile(a=self.bleus, q=10, axis=0)
+                    very_good = np.percentile(a=self.bleus, q=20, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
                     for i, ter in enumerate(bleus):
                         if ter > very_good:
@@ -1242,8 +1242,8 @@ class Model(nn.Module):
                     #okay = np.percentile(a=self.entropies, q=50, axis=0)
                     #good = np.percentile(a=self.entropies, q=15, axis=0)
                     #very_good = np.percentile(a=self.entropies, q=5, axis=0)
-                    uncertain = np.percentile(a=self.entropies, q=80, axis=0)
-                    certain = np.percentile(a=self.entropies, q=60, axis=0)
+                    uncertain = np.percentile(a=self.entropies, q=90, axis=0)
+                    certain = np.percentile(a=self.entropies, q=80, axis=0)
                     fill_value = np.zeros(shape=(batch_size))
                     for i, ent in enumerate(avg_sample_entropy):
                         if ent < certain:
