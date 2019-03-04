@@ -288,8 +288,8 @@ class Model(nn.Module):
         if logger is not None:
             logger.info("Examples from self-supervision:")
             join_char = " " if level in ["word", "bpe"] else ""
-            decoded_bs_hyp = [join_char.join(t) for t in arrays_to_sentences(bs_hyp[:3], vocabulary=self.trg_vocab)]
-            decoded_ref = [join_char.join(t) for t in arrays_to_sentences(torch.index_select(target, index=selection, dim=0)[:3], vocabulary=self.trg_vocab)]
+            decoded_bs_hyp = [join_char.join(t) for t in arrays_to_sentences(bs_hyp[:3], vocabulary=self.trg_vocab, cut_at_eos=False)]
+            decoded_ref = [join_char.join(t) for t in arrays_to_sentences(torch.index_select(target, index=selection, dim=0)[:3], vocabulary=self.trg_vocab, cut_at_eos=False)]
             for hyp, ref, logprob in zip(decoded_bs_hyp, decoded_ref, -self_sup_loss[:3]):
                 logger.info("\tSelf-supervision: {} ({:.3f})".format(hyp, logprob))
                 logger.info("\tReference: {}".format(ref))
@@ -1104,7 +1104,22 @@ class Model(nn.Module):
 
             # heuristic: always choose one type of supervision
             if pred is not False:
-                if pred == "random":
+                if pred == "random-fixed":
+                    rns = np.random.uniform(low=0.0, high=1.0, size=(batch_size))
+                    fill_value = np.zeros(shape=(batch_size))
+                    selft = 0.8
+                    weakt = 0.9
+                    for k, rn in enumerate(rns):
+                        if rn < selft:
+                            label = "self"
+                        elif rn >= weakt:
+                            label = "weak"
+                        else:
+                            label = "full"
+                        fill_value[k] = self.regulator.label2index[label]
+                    reg_pred = torch.from_numpy(fill_value).to(
+                            regulator_out.device).long()
+                elif pred == "random":
                     # random choice
                     fill_value = np.random.randint(0, self.regulator.output_size,
                                                    size=batch_size)
