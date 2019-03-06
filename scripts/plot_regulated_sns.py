@@ -34,7 +34,7 @@ def read_vfiles(vfiles, labels, types):
     """
     df = pd.DataFrame(columns=["steps", "model", "type", "MT-bleu", "Loss", "Total_Cost"])
     models = {}
-    time0 = 0
+    time0 = np.inf
     if labels is None:
         labels = vfiles
     for vfile, label, typ in zip(vfiles, labels, types):
@@ -153,6 +153,8 @@ def plot_models(models, df, x_value, y_value, output_path, plot_sup, lim_x):
         units = None
         lw = 1.5
     ax = sns.lineplot(x=x_value, y=y_value, data=df, hue="type", style="type", legend="brief", ci=ci, estimator=estimator, units=units, lw=lw)
+
+    # TODO add area chart: https://python-graph-gallery.com/254-pandas-stacked-area-chart/, https://python-graph-gallery.com/255-percentage-stacked-area-chart/
         #ax = sns.lineplot(x=xs, y=ys, markers=None, labels=model_name)
 
         #f.plot(xs, ys)

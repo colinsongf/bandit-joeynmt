@@ -3,7 +3,7 @@ name: "reverse_experiment"
 data:
     src: "src"
     trg: "trg"
-    hyp: "hyp"
+   # hyp: "hyp"
     train: "test/data/reverse/train"
     dev: "test/data/reverse/dev"
     test: "test/data/reverse/test"
@@ -57,7 +57,7 @@ training:
     budget: 5000
     cost_weight: 0.9
     budgeted_cost: False
-    only_sup: False
+    only_sup: "random-fixed"
     chunk_type: "sbleu"  # marking
     self_entropy: False # encourage high entropy for self-training
     weak_baseline: False
