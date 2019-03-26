@@ -26,7 +26,7 @@ from joeynmt.helpers import log_data_info, load_config, log_cfg, \
     make_logger, set_seed
 from joeynmt.model import Model
 from joeynmt.prediction import validate_on_data
-from joeynmt.data import load_data, make_data_iter
+from joeynmt.data import load_data, DataIterator
 from joeynmt.builders import build_optimizer, build_scheduler, \
     build_gradient_clipper
 
@@ -100,6 +100,7 @@ class TrainManager:
         self.epochs = train_config["epochs"]
         self.batch_size = train_config["batch_size"]
         self.batch_multiplier = train_config.get("batch_multiplier", 1)
+        self.bucket_size = train_config.get("bucket_size", 100)
 
         # generation
         self.max_output_length = train_config.get("max_output_length", None)
@@ -196,8 +197,11 @@ class TrainManager:
         :param train_data: training data
         :param valid_data: validation data
         """
-        train_iter = make_data_iter(train_data, batch_size=self.batch_size,
-                                    train=True, shuffle=self.shuffle)
+        train_iter = DataIterator(dataset=train_data,
+                                  batch_size=self.batch_size,
+                                  shuffle=self.shuffle,
+                                  sort_key=lambda x: len(x.src),
+                                  train=train, bucket_size=self.bucket_size)
         for epoch_no in range(self.epochs):
             self.logger.info("EPOCH %d", epoch_no + 1)
 
@@ -212,7 +216,7 @@ class TrainManager:
             count = 0
             epoch_loss = 0
 
-            for batch in iter(train_iter):
+            for batch in train_iter:
                 # reactivate training
                 self.model.train()
                 # create a Batch object from torchtext batch
@@ -243,7 +247,6 @@ class TrainManager:
                 # validate on the entire dev set
                 if self.steps % self.validation_freq == 0 and update:
                     valid_start_time = time.time()
-
                     valid_score, valid_loss, valid_ppl, valid_sources, \
                         valid_sources_raw, valid_references, valid_hypotheses, \
                         valid_hypotheses_raw, valid_attention_scores = \

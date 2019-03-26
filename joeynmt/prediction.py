@@ -14,7 +14,7 @@ from joeynmt.helpers import bpe_postprocess, load_config, \
 from joeynmt.metrics import bleu, chrf, token_accuracy, sequence_accuracy
 from joeynmt.model import build_model, Model
 from joeynmt.batch import Batch
-from joeynmt.data import load_data, make_data_iter
+from joeynmt.data import load_data, DataIterator
 
 
 # pylint: disable=too-many-arguments,too-many-locals,no-member
@@ -55,8 +55,8 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
         - decoded_valid: raw validation hypotheses (before post-processing),
         - valid_attention_scores: attention scores for validation hypotheses
     """
-    valid_iter = make_data_iter(dataset=data, batch_size=batch_size,
-                                shuffle=False, train=False)
+    valid_iter = DataIterator(dataset=data, batch_size=batch_size,
+                              shuffle=False, sort_key=None, train=False)
     valid_sources_raw = [s for s in data.src]
     pad_index = model.src_vocab.stoi[PAD_TOKEN]
     # disable dropout
@@ -67,7 +67,7 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
         valid_attention_scores = []
         total_loss = 0
         total_ntokens = 0
-        for valid_batch in iter(valid_iter):
+        for valid_batch in valid_iter:
             # run as during training to get validation loss (e.g. xent)
 
             batch = Batch(valid_batch, pad_index, use_cuda=use_cuda)
@@ -91,7 +91,6 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
             valid_attention_scores.extend(
                 attention_scores[sort_reverse_index]
                 if attention_scores is not None else [])
-
         assert len(all_outputs) == len(data)
 
         if loss_function is not None and total_ntokens > 0:
