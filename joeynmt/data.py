@@ -206,8 +206,9 @@ class DataIterator:
         :return: list of list of indices over dataset, each list is contains
             max `self.batch_size` indices
         """
-        if self.sort_key is not None:  # sort elements in bucket if required
-            bucket = sorted(bucket,
+        if self.sort_key is not None and self.train:  # sort elements in bucket
+            # elements within batches will be sorted likewise
+            bucket = sorted(bucket, reverse=True,
                             key=lambda b: self.sort_key(self.dataset[b]))
         batches = []
         while bucket:  # split into batches
@@ -216,9 +217,6 @@ class DataIterator:
             for i in range(min(self.batch_size, len(bucket))):
                 batch_id = bucket.pop(0)
                 batch.append(self.dataset[batch_id])
-            if self.sort_key is not None and self.train:  # sort within batch
-                batch = sorted(batch, key=lambda b: self.sort_key(b),
-                               reverse=True)
             batches.append(batch)
         if self.shuffle:  # shuffle batch order if required
             random.shuffle(batches)
