@@ -369,6 +369,10 @@ class TrainManager:
                             obj = self.model.reg_src_embed.lut
                             new_param_dict[name] = getattr(obj,
                                                            name.split(".")[-1])
+                        elif "action_layer" in name:
+                            obj = self.model.regulator.action_layer
+                            new_param_dict[name] = getattr(obj,
+                                                           name.split(".")[-1])
 
                     else:
                         new_param_dict[name] = param
