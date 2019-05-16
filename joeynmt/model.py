@@ -174,7 +174,7 @@ class Model(nn.Module):
                             hidden=decoder_hidden,
                             attention_drop=attention_drop)
 
-    def regulate(self, src, src_length, hyp):
+    def regulate(self, src, src_length, previous_output, hyp):
         """
 
         :param src:
@@ -182,6 +182,7 @@ class Model(nn.Module):
         :return:
         """
         return self.regulator(src=self.reg_src_embed(src), src_length=src_length,
+                              previous_output=previous_output,
                               hyp=self.reg_src_embed(hyp) if hyp is not None else None)
 
     # TODO split batch according to regulator prediction
@@ -1088,9 +1089,17 @@ class Model(nn.Module):
             #    unrol_steps=sample_hyp_pad_bos.shape[1])
             #sample_log_probs = F.log_softmax(sample_out, dim=-1)
 
-            regulator_out = self.regulate(batch.src,
-                                          batch.src_lengths,
-                                          hyp=hyp)  # bs_target)
+            # iterate over batch:
+            previous_output = batch.src.new_zeros(1, self.regulator.output_size).float()
+            regulator_out = []
+            for s, l, h in zip(batch.src, batch.src_lengths, hyp):
+                previous_output = self.regulate(s.unsqueeze(0), #batch.src,
+                                              l.unsqueeze(0), #batch.src_lengths,
+                                              # smooth prev output
+                                              previous_output=F.softmax(previous_output, dim=1).detach(),
+                                              hyp=h.unsqueeze(0))  # bs_target)
+                regulator_out.append(previous_output)
+            regulator_out = torch.cat(regulator_out, dim=0)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
 
             # sample an output

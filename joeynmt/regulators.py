@@ -64,6 +64,7 @@ class RecurrentRegulator(Regulator):
 
         self.middle_layer = nn.Linear(in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1),
                                       out_features=middle_size)
+        self.action_layer = nn.Linear(self.output_size, middle_size)
 
         self.output_layer = nn.Linear(
             in_features=self.middle_layer.out_features,
@@ -73,12 +74,13 @@ class RecurrentRegulator(Regulator):
         )
         self.feed_trg = feed_trg
 
-    def forward(self, src, src_length, hyp=None):
+    def forward(self, src, src_length, previous_output, hyp=None):
         """
         Read src with Bi-RNNs, take last hidden states and combine
         :param src:
         :return:
         """
+        # TODO previous output can either be one hot or distribution
         # TODO this is the same as in MT encoder
 
         # apply dropout ot the rnn input
@@ -134,10 +136,12 @@ class RecurrentRegulator(Regulator):
         else:
             input_to_middle = hidden_concat
 
-        middle = torch.tanh(self.middle_layer(input_to_middle))
+        middle = self.middle_layer(input_to_middle) # torch.tanh
+
+        proj_action = self.action_layer(previous_output) #torch.tanh(
 
         # TODO activation function?
-        output = self.output_layer(middle)
+        output = self.output_layer(torch.tanh(middle+proj_action))
 
         return output
 
@@ -148,22 +152,3 @@ class RecurrentRegulator(Regulator):
         #    [fwd_hidden_last, bwd_hidden_last], dim=2).squeeze(0)
         # final: batch x directions*hidden
         #return output, hidden_concat
-
-class AttentionalRegulator(Regulator):
-    """
-       Attentional regulator model that predicts a feedback mode
-       """
-
-    def __init__(self, src_embed_size, output_size):
-        super(AttentionalRegulator, self).__init__(output_size=output_size,
-                                                   src_emb_size=src_embed_size)
-
-class ConvolutionalRegulator(Regulator):
-    """
-    Convolutional regulator model that predicts a feedback mode
-    """
-
-    def __init__(self, src_emb_size, output_size):
-        super(ConvolutionalRegulator, self).__init__(src_emb_size=src_emb_size,
-                                                     output_size=output_size)
-
