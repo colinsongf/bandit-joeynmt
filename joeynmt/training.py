@@ -279,6 +279,8 @@ class TrainManager:
         self.logger.info("Ignoring the cost: {}".format(self.no_cost))
         if self.model.regulator is not None:
             self.logger.info("Feeding trg to regulator: {}".format(self.model.regulator.feed_trg))
+        self.alpha = train_config.get("alpha", 1.0)
+        self.logger.info("Using alpha={} as smoothing constant for cost.".format(self.alpha))
 
     def save_checkpoint(self):
         """
@@ -1064,7 +1066,7 @@ class TrainManager:
             trade_off = costs.new([reward * 100])*losses/losses.sum().detach() / (costs +1)
             self.logger.info("weighted trade-off {}".format(trade_off))
         else:
-            trade_off = costs.new([reward * 100]) / (costs + 1)
+            trade_off = costs.new([reward * 100]) / (costs + self.alpha)
             self.logger.info("trade_off: {}".format(trade_off))
 
         if self.entropy_regularizer > 0:

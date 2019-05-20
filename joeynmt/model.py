@@ -1094,6 +1094,7 @@ class Model(nn.Module):
             previous_output = batch.src.new_zeros(1, self.regulator.output_size).float()
             hidden_regulator = None
             regulator_out = []
+            # TODO doesn't work if feed_trg is False
             for s, l, h in zip(batch.src, batch.src_lengths, hyp):
                 hidden_regulator, previous_output = self.regulate(s.unsqueeze(0), #batch.src,
                                               l.unsqueeze(0), #batch.src_lengths,
