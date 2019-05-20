@@ -62,19 +62,28 @@ class RecurrentRegulator(Regulator):
 
         self.rnn_input_dropout = torch.nn.Dropout(p=dropout, inplace=False)
 
-        self.middle_layer = nn.Linear(in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1),
-                                      out_features=middle_size)
-        self.action_layer = nn.Linear(self.output_size, middle_size)
+        #self.middle_layer = nn.Linear(in_features=self.src_rnn.hidden_size*(2 if bidirectional else 1),
+        #                              out_features=middle_size)
+        #self.action_layer = nn.Linear(self.output_size, middle_size)
 
-        self.output_layer = nn.Linear(
-            in_features=self.middle_layer.out_features,
+        self.output_layer = nn.Linear(middle_size,
+            #in_features=self.middle_layer.out_features,
             #self.src_rnn.hidden_size*(2 if bidirectional else 1),
                       #  self.trg_rnn.hidden_size*(2 if bidirectional else 1),
             out_features=self.output_size
         )
         self.feed_trg = feed_trg
 
-    def forward(self, src, src_length, previous_output, hyp=None):
+        # RNN: inputs are encoded src+trg, encoded previous action, hidden size is middle
+        self.rnn = nn.GRU if type == "gru" else nn.LSTM
+
+        self.regulator_rnn = rnn(
+            self.src_rnn.hidden_size*(2 if bidirectional else 1)+self.output_size,
+            middle_size, 1, batch_first=True,
+            bidirectional=False,
+            dropout=0.)
+
+    def forward(self, src, src_length, hidden_regulator, previous_output, hyp=None):
         """
         Read src with Bi-RNNs, take last hidden states and combine
         :param src:
@@ -136,15 +145,22 @@ class RecurrentRegulator(Regulator):
         else:
             input_to_middle = hidden_concat
 
-        middle = self.middle_layer(input_to_middle) # torch.tanh
+        curr_in = torch.cat([input_to_middle, previous_output], 1).unsqueeze(1)
+        _, hidden_regulator = self.regulator_rnn(curr_in, hidden_regulator)
+        if isinstance(hidden_regulator, tuple):
+            hidden_regulator_state = hidden_regulator[0].squeeze(1) # c, m
+        else:
+            hidden_regulator_state = hidden_regulator.squeeze(1)
+        output = self.output_layer(hidden_regulator_state)
 
-        proj_action = self.action_layer(previous_output) #torch.tanh(
+        #middle = self.middle_layer(input_to_middle) # torch.tanh
 
-        # TODO activation function?
-        output = self.output_layer(torch.tanh(middle+proj_action))
+        #proj_action = self.action_layer(previous_output) #torch.tanh(
 
-        return output
+        ## TODO activation function?
+        #output = self.output_layer(torch.tanh(middle+proj_action))
 
+        return hidden_regulator, output
 
 
         # only feed the final state of the top-most layer to the decoder

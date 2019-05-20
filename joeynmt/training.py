@@ -373,6 +373,10 @@ class TrainManager:
                             obj = self.model.regulator.action_layer
                             new_param_dict[name] = getattr(obj,
                                                            name.split(".")[-1])
+                        elif "regulator_rnn" in name:
+                            obj = self.model.regulator.regulator_rnn
+                            new_param_dict[name] = getattr(obj,
+                                                           name.split(".")[-1])
 
                     else:
                         new_param_dict[name] = param
@@ -415,6 +419,11 @@ class TrainManager:
                         # print(getattr(obj, name.split(".")[-1]))
                         new_param_dict[name] = getattr(obj, name.split(".")[
                             -1])  # init(torch.empty_like(getattr(obj, name.split(".")[-1])))
+
+                    elif "regulator_rnn" in name:
+                        obj = self.model.regulator.regulator_rnn
+                        new_param_dict[name] = getattr(obj,
+                                                       name.split(".")[-1])
 
 
             self.model.load_state_dict(new_param_dict)

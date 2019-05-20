@@ -174,7 +174,7 @@ class Model(nn.Module):
                             hidden=decoder_hidden,
                             attention_drop=attention_drop)
 
-    def regulate(self, src, src_length, previous_output, hyp):
+    def regulate(self, src, src_length, hidden_regulator, previous_output, hyp):
         """
 
         :param src:
@@ -182,6 +182,7 @@ class Model(nn.Module):
         :return:
         """
         return self.regulator(src=self.reg_src_embed(src), src_length=src_length,
+                              hidden_regulator=hidden_regulator,
                               previous_output=previous_output,
                               hyp=self.reg_src_embed(hyp) if hyp is not None else None)
 
@@ -1091,11 +1092,14 @@ class Model(nn.Module):
 
             # iterate over batch:
             previous_output = batch.src.new_zeros(1, self.regulator.output_size).float()
+            hidden_regulator = None
             regulator_out = []
             for s, l, h in zip(batch.src, batch.src_lengths, hyp):
-                previous_output = self.regulate(s.unsqueeze(0), #batch.src,
+                hidden_regulator, previous_output = self.regulate(s.unsqueeze(0), #batch.src,
                                               l.unsqueeze(0), #batch.src_lengths,
                                               # smooth prev output
+                                              hidden_regulator = hidden_regulator,
+                                                # TODO without detach
                                               previous_output=F.softmax(previous_output, dim=1).detach(),
                                               hyp=h.unsqueeze(0))  # bs_target)
                 regulator_out.append(previous_output)
