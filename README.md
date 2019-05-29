@@ -1,5 +1,8 @@
 # &nbsp; ![Joey-NMT](joey-small.png) Joey NMT
 
+This is the JoeyNMT branch that was used for the experiments in the ACL 2019 paper 'Self-Regulated Interactive Sequence-to-Sequence Learning' by Julia Kreutzer and Stefan Riezler.
+Descriptions on how to replicate the experiments will be added soon.
+
 ## Goal and Purpose
 Joey NMT framework is developed for educational purposes. 
 It aims to be a **clean** and **minimalistic** code base to help novices 
