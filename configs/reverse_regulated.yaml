@@ -48,7 +48,7 @@ training:
     max_output_length: 11
     print_valid_sents: 3
     loss_weights: {"mt": 1.0, "regulator": 1.0}
-    #load_model: "reverse/1017.ckpt"
+    #load_model: "reverse_model/1000.ckpt"
     #load_regulator: "reverse_new/1003.ckpt"
     baseline: "first"  # mean, first, previous, False  # baseline reward for regulator
     weak_baseline: True
@@ -57,16 +57,17 @@ training:
     budget: 5000
     cost_weight: 0.9
     budgeted_cost: False
-    only_sup: "random-fixed"
+    only_sup: "epsilon" # "random-fixed"
     chunk_type: "sbleu"  # marking
     self_entropy: False # encourage high entropy for self-training
     weak_baseline: False
     init_from_mt: True
-    self_attention_drop: 0.9
+    self_attention_drop: 0.5
     pe_ratio: 0.5
     epsilon: 0.5
-    weighted_reward: True
-    no_cost: True
+    weighted_reward: False
+    no_cost: False
+    alpha: 0.001
 
 model:
     initializer: "xavier"
