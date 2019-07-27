@@ -1,5 +1,7 @@
 name: "reverse_experiment"
 
+# This configuration file contains additional settings for self-regulated learning.
+
 data:
     src: "src"
     trg: "trg"
@@ -25,7 +27,6 @@ training:
     optimizer: "adam"
     loss: "crossentropy"
     learning_rate: {"mt": 0.0001, "regulator": 0.003}
-   # learning_rate: 0.0001
     learning_rate_min: 0.00002
 #    clip_grad_val: 1.0
     weight_decay: 0.0
@@ -41,7 +42,7 @@ training:
     validation_freq: 10
     logging_freq: 100
     eval_metric: "bleu"
-    model_dir: "uncertainty" #_regulated"
+    model_dir: "uncertainty"
     overwrite: True
     shuffle: True
     use_cuda: False
@@ -50,24 +51,20 @@ training:
     loss_weights: {"mt": 1.0, "regulator": 1.0}
     #load_model: "reverse_model/1000.ckpt"
     #load_regulator: "reverse_new/1003.ckpt"
-    baseline: "first"  # mean, first, previous, False  # baseline reward for regulator
-    weak_baseline: True
-    weak_search: "offline"
+    baseline: "first"  # baseline reward computation for regulator: mean, first, previous, False
+    weak_baseline: False  # use a baseline reward for weak feedback
+    weak_search: "offline"  # use offline targets for weak feedback
     entropy_regularizer: 0.0  # encourage exploration
-    budget: 5000
-    cost_weight: 0.9
-    budgeted_cost: False
-    only_sup: "epsilon" # "random-fixed"
+    only_sup: "epsilon"  # only use this supervision mode, or "random", "fixed", "epsilon", "self", "full", "weak", "none"
     chunk_type: "sbleu"  # marking
-    self_entropy: False # encourage high entropy for self-training
-    weak_baseline: False
-    init_from_mt: True
-    self_attention_drop: 0.5
-    pe_ratio: 0.5
-    epsilon: 0.5
-    weighted_reward: False
-    no_cost: False
-    alpha: 0.001
+    self_entropy: False  # encourage high entropy for self-training
+    init_from_mt: True  # initialize the regulator parameters from the MT
+    self_attention_drop: 0.5  # dropout on attention for self-training
+    pe_ratio: 1.0  # ratio of possible post-edits that is performed
+    epsilon: 0.5  # for epsilon greedy
+    weighted_reward: False  # special weight for reward
+    no_cost: False  # train if there is no cost
+    alpha: 0.001  # added to the cost for avoiding divivision by 0
 
 model:
     initializer: "xavier"
@@ -106,7 +103,7 @@ model:
         hidden_size: 63
         middle_size: 31
         dropout: 0.1
-        output_labels: ["self", "weak", "full"]
+        output_labels: ["self", "weak", "full"]  # supervision types that are available
         #["none", "self", "weak", "full"]
         num_layers: 2
         bidirectional: True

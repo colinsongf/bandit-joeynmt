@@ -38,9 +38,6 @@ def build_model(cfg: dict = None,
         trg_embed = Embeddings(
             **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
             padding_idx=trg_padding_idx)
-        #reg_trg_embed = Embeddings(
-        #    **cfg["regulator"]["embeddings"], vocab_size=len(trg_vocab),
-        #    padding_idx=trg_padding_idx)
 
     encoder = RecurrentEncoder(**cfg["encoder"],
                                emb_size=src_embed.embedding_dim)
@@ -53,14 +50,13 @@ def build_model(cfg: dict = None,
             padding_idx=src_padding_idx)
         regulator = RecurrentRegulator(**cfg["regulator"],
                                    src_emb_size=reg_src_embed.embedding_dim)
-                                 #  trg_emb_size=reg_trg_embed.embedding_dim)
     else:
         regulator = None
         reg_src_embed = None
 
     model = Model(encoder=encoder, decoder=decoder, regulator=regulator,
                   src_embed=src_embed, trg_embed=trg_embed,
-                  reg_src_embed=reg_src_embed, #reg_trg_embed=reg_trg_embed,
+                  reg_src_embed=reg_src_embed,
                   src_vocab=src_vocab, trg_vocab=trg_vocab)
 
     # custom initialization of model parameters
@@ -115,8 +111,10 @@ class Model(nn.Module):
         self.bleus = []
         self.entropies = []
         if self.regulator is not None:
-            self.rewards_per_output = {i: [] for i in self.regulator.index2label.keys()}
-            self.costs_per_output = {i: [] for i in self.regulator.index2label.keys()}
+            self.rewards_per_output = {i: [] for i in
+                                       self.regulator.index2label.keys()}
+            self.costs_per_output = {i: [] for i in
+                                     self.regulator.index2label.keys()}
 
     def forward(self, src, trg_input, src_mask, src_lengths):
         """
@@ -181,20 +179,19 @@ class Model(nn.Module):
         :param hyp:
         :return:
         """
-        return self.regulator(src=self.reg_src_embed(src), src_length=src_length,
+        return self.regulator(src=self.reg_src_embed(src),
+                              src_length=src_length,
                               hidden_regulator=hidden_regulator,
                               previous_output=previous_output,
-                              hyp=self.reg_src_embed(hyp) if hyp is not None else None)
-
-    # TODO split batch according to regulator prediction
-    # then for each part of the batch compute parts
-    # then sum loss
-    # -> still mini-batching, but smaller
+                              hyp=self.reg_src_embed(hyp) if
+                              hyp is not None else None)
 
     def _self_sup_loss(self, selection, encoder_out, encoder_hidden, src_mask,
-                       max_output_length, criterion, target, level, beam_size=10,
+                       max_output_length, criterion, target, level,
+                       beam_size=10,
                        beam_alpha=1.0, entropy=False, logger=None,
-                       attention_drop=0.0, hyps=None, hyp_inputs=None, hyp_masks=None):
+                       attention_drop=0.0, hyps=None, hyp_inputs=None,
+                       hyp_masks=None):
         """
         Compute the loss for self-supervised training for the given selection
         of indices of the batch
@@ -205,6 +202,18 @@ class Model(nn.Module):
         :param encoder_out:
         :param encoder_hidden:
         :param src_mask:
+        :param max_output_length:
+        :param criterion:
+        :param target:
+        :param level:
+        :param beam_alpha:
+        :param beam_size:
+        :param entropy:
+        :param logger:
+        :param attention_drop:
+        :param hyps:
+        :param hyp_inputs:
+        :param hyp_masks:
         :return:
         """
         selected_encoder_out = torch.index_select(encoder_out, index=selection,
@@ -216,30 +225,28 @@ class Model(nn.Module):
 
         if hyps is not None and hyp_inputs is not None and hyp_masks is not None:
             selected_hyps = torch.index_select(hyps, index=selection, dim=0)
-            selected_hyp_inputs = torch.index_select(hyp_inputs, index=selection, dim=0)
-            selected_hyp_masks = torch.index_select(hyp_masks, index=selection, dim=0)
-            #logger.info("SELF USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
-            # instead of sampling from the current model, take the log hypothesis
+            selected_hyp_inputs = torch.index_select(hyp_inputs,
+                                                     index=selection, dim=0)
+            selected_hyp_masks = torch.index_select(hyp_masks,
+                                                    index=selection, dim=0)
             bs_hyp = selected_hyps
-            bs_hyp_mask = selected_hyp_masks
             bs_hyp_inputs = selected_hyp_inputs
             bs_target = bs_hyp
             selected_tokens = selected_hyp_masks.sum().cpu().numpy()
         else:
             bs_hyp, _ = beam_search(size=beam_size,
-                                           encoder_output=selected_encoder_out,
-                                           encoder_hidden=selected_encoder_hidden,
-                                           src_mask=selected_src_mask,
-                                           embed=self.trg_embed,
-                                           max_output_length=max_output_length,
-                                           alpha=beam_alpha,
-                                           eos_index=self.eos_index,
-                                           pad_index=self.pad_index,
-                                           bos_index=self.bos_index,
-                                           decoder=self.decoder)
+                                    encoder_output=selected_encoder_out,
+                                    encoder_hidden=selected_encoder_hidden,
+                                    src_mask=selected_src_mask,
+                                    embed=self.trg_embed,
+                                    max_output_length=max_output_length,
+                                    alpha=beam_alpha,
+                                    eos_index=self.eos_index,
+                                    pad_index=self.pad_index,
+                                    bos_index=self.bos_index,
+                                    decoder=self.decoder)
             bs_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
                                   fill_value=self.pad_index)
-            # print("padded", bs_hyp_pad)
             bos_array = np.full(shape=(selected_batch_size, 1),
                                 fill_value=self.bos_index)
             # prepend bos but cut off one bos
@@ -255,21 +262,15 @@ class Model(nn.Module):
 
             selected_tokens = bs_hyp.size
 
-        # print("with bos", bs_hyp_pad_bos)
-
-        # treat bs output as target for forced decoding to get log likelihood of bs output
+        # treat bs output as target for forced decoding to get log likelihood
+        #  of beam search output
         bs_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
-                                           encoder_hidden=selected_encoder_hidden,
-                                           trg_input=bs_hyp_inputs,
-                                           src_mask=selected_src_mask,
-                                           unrol_steps=bs_hyp_inputs.shape[1],
+                                      encoder_hidden=selected_encoder_hidden,
+                                      trg_input=bs_hyp_inputs,
+                                      src_mask=selected_src_mask,
+                                      unrol_steps=bs_hyp_inputs.shape[1],
                                       attention_drop=attention_drop)
         bs_log_probs = F.log_softmax(bs_out, dim=-1)
-        # greedy_log_prob = self.force_decode(encoder_output=encoder_out,
-        #                                 encoder_hidden=encoder_hidden,
-        #                                 trg_input=batch.trg.new(greedy_hyp).long(),
-        #                                 src_mask=batch.src_mask)
-
 
         bs_nll = criterion(
             input=bs_log_probs.contiguous().view(-1, bs_log_probs.size(-1)),
@@ -282,27 +283,33 @@ class Model(nn.Module):
             entropy = (-torch.exp(bs_log_probs) * bs_log_probs).sum(
                 -1).mean(1)
             logger.info("entropy: {}".format(entropy))
-            self_sup_loss = self_sup_loss - entropy #.detach()  # *confidence.detach()
+            self_sup_loss = self_sup_loss - entropy
             logger.info("entropy-weighted: {}".format(self_sup_loss))
-        # TODO logprob selection can actually be done for all, just return chosen hyp and reward
-        # then logprobs are selected and multiplied by reward
 
+        # then logprobs are selected and multiplied by reward
         if logger is not None:
             logger.info("Examples from self-supervision:")
             join_char = " " if level in ["word", "bpe"] else ""
-            decoded_bs_hyp = [join_char.join(t) for t in arrays_to_sentences(bs_hyp[:3], vocabulary=self.trg_vocab, cut_at_eos=False)]
-            decoded_ref = [join_char.join(t) for t in arrays_to_sentences(torch.index_select(target, index=selection, dim=0)[:3], vocabulary=self.trg_vocab, cut_at_eos=False)]
-            for hyp, ref, logprob in zip(decoded_bs_hyp, decoded_ref, -self_sup_loss[:3]):
-                logger.info("\tSelf-supervision: {} ({:.3f})".format(hyp, logprob))
+            decoded_bs_hyp = [join_char.join(t) for t in
+                              arrays_to_sentences(
+                                  bs_hyp[:3], vocabulary=self.trg_vocab,
+                                  cut_at_eos=False)]
+            decoded_ref = [join_char.join(t) for t in arrays_to_sentences(
+                torch.index_select(target, index=selection, dim=0)[:3],
+                vocabulary=self.trg_vocab, cut_at_eos=False)]
+            for hyp, ref, logprob in zip(decoded_bs_hyp,
+                                         decoded_ref, -self_sup_loss[:3]):
+                logger.info("\tSelf-supervision: {} ({:.3f})".format(
+                    hyp, logprob))
                 logger.info("\tReference: {}".format(ref))
 
 
         assert self_sup_loss.size(0) == selected_batch_size
         return self_sup_loss.sum(), selected_tokens, selected_batch_size
 
-    def _weak_sup_loss(self, selection, src, encoder_out, encoder_hidden, src_mask,
-                       max_output_length, chunk_type, criterion, target, level,
-                       weak_baseline=True, weak_temperature=1.0,
+    def _weak_sup_loss(self, selection, src, encoder_out, encoder_hidden,
+                       src_mask, max_output_length, chunk_type, criterion,
+                       target, level, weak_baseline=True, weak_temperature=1.0,
                        weak_search="sample",
                        beam_size=10, beam_alpha=1.0, logger=None,
                        case_sensitive=True,
@@ -315,6 +322,25 @@ class Model(nn.Module):
         Reward is either token- or sequence-based
 
         :param selection:
+        :param src:
+        :param encoder_out:
+        :param encoder_hidden:
+        :param src_mask:
+        :param max_output_length:
+        :param chunk_type:
+        :param criterion:
+        :param target:
+        :param level:
+        :param weak_baseline:
+        :param weak_temperature:
+        :param weak_search:
+        :param beam_size:
+        :param beam_alpha:
+        :param logger:
+        :param case_sensitive:
+        :param hyps:
+        :param hyp_inputs:
+        :param hyp_masks:
         :return:
         """
         selected_srcs = torch.index_select(src, dim=0, index=selection)
@@ -328,13 +354,14 @@ class Model(nn.Module):
         trg_np = selected_trg.detach().cpu().numpy()
         selected_batch_size = selection.shape[0]
 
-        if hyps is not None and hyp_inputs is not None and hyp_masks is not None \
+        if hyps is not None and hyp_inputs is not None and hyp_masks \
+                is not None \
                 and weak_search == "offline":
             selected_hyps = torch.index_select(hyps, index=selection, dim=0)
-            selected_hyp_inputs = torch.index_select(hyp_inputs, index=selection, dim=0)
-            selected_hyp_masks = torch.index_select(hyp_masks, index=selection, dim=0)
-            #logger.info("WEAK USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
-            # instead of sampling from the current model, take the log hypothesis
+            selected_hyp_inputs = torch.index_select(hyp_inputs,
+                                                     index=selection, dim=0)
+            selected_hyp_masks = torch.index_select(hyp_masks,
+                                                    index=selection, dim=0)
             sample_hyp = selected_hyps
             sample_hyp_mask = selected_hyp_masks
             sample_hyp_inputs = selected_hyp_inputs
@@ -344,24 +371,22 @@ class Model(nn.Module):
 
             if weak_search == "sample":
                 sample_hyp, _ = sample(encoder_output=selected_encoder_out,
-                                     encoder_hidden=selected_encoder_hidden,
-                                     src_mask=selected_src_mask, embed=self.trg_embed,
-                                     max_output_length=max_output_length,
-                                     bos_index=self.bos_index,
-                                     decoder=self.decoder, temperature=weak_temperature)
+                                       encoder_hidden=selected_encoder_hidden,
+                                       src_mask=selected_src_mask,
+                                       embed=self.trg_embed,
+                                       max_output_length=max_output_length,
+                                       bos_index=self.bos_index,
+                                       decoder=self.decoder,
+                                       temperature=weak_temperature)
 
             elif weak_search == "beam":
-                sample_hyp, _ = beam_search(size=beam_size,
-                                        encoder_output=selected_encoder_out,
-                                        encoder_hidden=selected_encoder_hidden,
-                                        src_mask=selected_src_mask,
-                                        embed=self.trg_embed,
-                                        max_output_length=max_output_length,
-                                        alpha=beam_alpha,
-                                        eos_index=self.eos_index,
-                                        pad_index=self.pad_index,
-                                        bos_index=self.bos_index,
-                                        decoder=self.decoder)
+                sample_hyp, _ = beam_search(
+                    size=beam_size, encoder_output=selected_encoder_out,
+                    encoder_hidden=selected_encoder_hidden,
+                    src_mask=selected_src_mask, embed=self.trg_embed,
+                    max_output_length=max_output_length, alpha=beam_alpha,
+                    eos_index=self.eos_index, pad_index=self.pad_index,
+                    bos_index=self.bos_index, decoder=self.decoder)
             else:  # greedy
                 sample_hyp, _ = greedy(encoder_output=selected_encoder_out,
                                        encoder_hidden=selected_encoder_hidden,
@@ -371,14 +396,9 @@ class Model(nn.Module):
                                        bos_index=self.bos_index,
                                        decoder=self.decoder)
 
-            sample_hyp_mask = np.not_equal(sample_hyp, self.pad_index).astype(int)
+            sample_hyp_mask = np.not_equal(
+                sample_hyp, self.pad_index).astype(int)
 
-            #sample_hyp_pad = np.full(shape=(selected_batch_size, max_output_length),
-            #                     fill_value=self.pad_index)
-            #for i, row in enumerate(sample_hyp):
-            #    for j, col in enumerate(row):
-            #        sample_hyp_pad[i, j] = col
-            # print("padded", bs_hyp_pad)
             bos_array = np.full(shape=(selected_batch_size, 1),
                                 fill_value=self.bos_index)
             # prepend bos but cut off one pad
@@ -388,12 +408,8 @@ class Model(nn.Module):
             sample_target = src_mask.new(sample_hyp).long()
             selected_tokens = sample_hyp.size
 
-
-
-
-        # print("with bos", bs_hyp_pad_bos)
-
-        # treat bs output as target for forced decoding to get log likelihood of bs output
+        # treat bs output as target for forced decoding to get log likelihood
+        #  of bs output
         sample_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
                                       encoder_hidden=selected_encoder_hidden,
                                       trg_input=sample_hyp_inputs,
@@ -401,9 +417,9 @@ class Model(nn.Module):
                                       unrol_steps=sample_hyp_inputs.shape[1])
         sample_log_probs = F.log_softmax(sample_out, dim=-1)
 
-
         sample_nll = criterion(
-            input=sample_log_probs.contiguous().view(-1, sample_log_probs.size(-1)),
+            input=sample_log_probs.contiguous().view(-1,
+                                                     sample_log_probs.size(-1)),
             target=sample_target.view(-1)).view(selected_batch_size, -1)
 
         # decode reference
@@ -434,13 +450,8 @@ class Model(nn.Module):
             refs_np_decoded_list = [t.split(" ") for t in refs_np_decoded]
 
         if chunk_type == "marking":
-            # in case of markings: "chunk-based" feedback: nll of bs weighted by 0/1
-            # 1 if correct, 0 if incorrect
-            # fill curr_hyp with padding, since different length
-            # print("bs", bs_hyp_pad)
-            # print("trg", trg_np)
-            # padding area is zero
-            # TODO use case sensitivity
+            # in case of markings: "chunk-based" feedback:
+            # nll of bs weighted by 0/1, 1 if correct, 0 if incorrect
             if type(sample_hyp) is torch.Tensor:
                 sample_hyp = sample_hyp.cpu().numpy()
                 sample_hyp_mask = sample_hyp_mask.cpu().numpy()
@@ -461,27 +472,24 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_markings = (markings - np.mean(self.rewards))*sample_hyp_mask
+                    new_markings = (markings - np.mean(self.rewards)) \
+                                   * sample_hyp_mask
                 else:
                     new_markings = markings
-                #update baseline
-               # print("valid", valid_rewards)
+                # update baseline
                 self.rewards.extend(valid_rewards)
             else:
                 new_markings = markings
-            #print("final", new_markings*sample_mask)
-           # if weak_baseline:
-           #     # baseline over time
-           #     # TODO over batch?
-           #     markings -= np.mean(markings, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(new_markings*sample_hyp_mask).float()).sum(1)
+
+            chunk_loss = (sample_nll * src_mask.new(
+                new_markings*sample_hyp_mask).float()).sum(1)
             costs = markings.sum(-1)
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
-                                            refs_np_decoded_list[:3], decoded_srcs[:3],
-                                            -sample_nll[:3].sum(1),
-                                            new_markings[:3], costs[:3]):
+            for hyp, ref, src, logprob, mark, cost in zip(
+                    hyps_decoded_list[:3],refs_np_decoded_list[:3],
+                    decoded_srcs[:3], -sample_nll[:3].sum(1),
+                    new_markings[:3], costs[:3]):
                 logger.info("\tSource: {}".format(src))
                 logger.info(
                     "\t{} for weak: {} ({:.3f})".format(weak_search, hyp,
@@ -493,9 +501,7 @@ class Model(nn.Module):
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "match":
-            # 1 if occurs in reference, 0 if it doesn't
-            # position-independent
-            # TODO include case sensitivity
+            # 1 if occurs in reference, 0 if it doesn't, position-independent
             if type(sample_hyp) is torch.Tensor:
                 sample_hyp = sample_hyp.cpu().numpy()
                 sample_hyp_mask = sample_hyp_mask.cpu().numpy()
@@ -521,37 +527,30 @@ class Model(nn.Module):
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_matches = (matches - np.mean(self.rewards))*sample_hyp_mask
+                    new_matches = (matches - np.mean(self.rewards)) * \
+                                  sample_hyp_mask
                 else:
                     new_matches = matches
                 # update baseline
                 self.rewards.extend(valid_matches)
             else:
                 new_matches = matches
-#            print("hyp", sample_hyp_pad)
-#            print("ref", trg_np)
-#            print("matches", matches)
-            #if weak_baseline:
-            #    # baseline over time
-            #    # TODO over batch?
-            #    matches -= np.mean(matches, axis=1, keepdims=True)
-            chunk_loss = (sample_nll * src_mask.new(new_matches*sample_hyp_mask).float()).sum(1)
+
+            chunk_loss = (sample_nll * src_mask.new(
+                new_matches*sample_hyp_mask).float()).sum(1)
 
             costs = matches.sum(-1)
 
-
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
-                                               refs_np_decoded_list[:3],
-                                                    decoded_srcs[:3],
-                                                    -sample_nll[:3].sum(1),
-                                               new_matches[:3],
-                                                          costs[:3]):
+            for hyp, ref, src, logprob, mark, cost in zip(
+                    hyps_decoded_list[:3], refs_np_decoded_list[:3],
+                    decoded_srcs[:3], -sample_nll[:3].sum(1),
+                    new_matches[:3], costs[:3]):
                 logger.info("\tSource: {}".format(src))
 
                 logger.info(
-                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
-                                                        logprob))
+                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(
+                        weak_search, case_sensitive, hyp, logprob))
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tMatching {}".format([(h, m) for h, m in zip(hyp, mark)]))
@@ -559,10 +558,9 @@ class Model(nn.Module):
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "lcs":
-            #def token_lcs_reward(gold, pred):
-                # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
-                # idea from http://www.aclweb.org/anthology/P18-2052
-                # TODO adapt to all longest substrings
+            # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/
+            # Strings/Longest_common_substring#Python
+            # idea from http://www.aclweb.org/anthology/P18-2052
             def longest_common_substring_rewards(pred, gold):
                 m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
                 longest, x_longest = 0, 0
@@ -570,7 +568,9 @@ class Model(nn.Module):
                 for x in range(1, 1 + len(pred)):
                     for y in range(1, 1 + len(gold)):
                         # prevent padding area from getting rewarded
-                        if pred[x - 1] == gold[y - 1] and pred[x-1] != self.pad_index and gold[y-1] != self.pad_index:
+                        if pred[x - 1] == gold[y - 1] and \
+                                        pred[x-1] != self.pad_index and \
+                                        gold[y-1] != self.pad_index:
                             m[x][y] = m[x - 1][y - 1] + 1
                             if m[x][y] > longest:
                                 longest = m[x][y]
@@ -578,7 +578,6 @@ class Model(nn.Module):
                         else:
                             m[x][y] = 0
                 rewards[x_longest - longest: x_longest] = 1
-                #return pred[x_longest - longest: x_longest]
                 return rewards
 
             if type(sample_hyp) is torch.Tensor:
@@ -586,14 +585,16 @@ class Model(nn.Module):
                 sample_hyp_mask = sample_hyp_mask.cpu().numpy()
 
             all_rewards = np.zeros_like(sample_hyp, dtype=float)
-            for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
+            # iterate over batch
+            for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):
                 r = longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
                     all_rewards[j, i] = r_i  # r does cover padding area
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_hyp_mask
+                    new_rewards = (all_rewards - np.mean(self.rewards)) * \
+                                  sample_hyp_mask
                 else:
                     new_rewards = all_rewards
                 # update baseline
@@ -606,27 +607,21 @@ class Model(nn.Module):
                 self.rewards.extend(valid_rewards)
             else:
                 new_rewards = all_rewards
-            #if weak_baseline:
-            #    # baseline over time
-            #    # TODO over batch?
-            #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
 
-            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_hyp_mask).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(
+                new_rewards*sample_hyp_mask).float()).sum(1)
 
             costs = all_rewards.sum(-1)
 
-
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
-                                               refs_np_decoded_list[:3],
-                                               decoded_srcs[:3],
-                                               -sample_nll[:3].sum(1),
-                                               new_rewards[:3],
-                                                          costs[:3]):
+            for hyp, ref, src, logprob, mark, cost in zip(
+                    hyps_decoded_list[:3], refs_np_decoded_list[:3],
+                    decoded_srcs[:3], -sample_nll[:3].sum(1), new_rewards[:3],
+                    costs[:3]):
                 logger.info("\tSrc: {}".format(src))
                 logger.info(
-                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
-                                                        logprob))
+                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(
+                        weak_search, case_sensitive, hyp, logprob))
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tLCS {}".format([(h, m) for h, m in zip(hyp, mark)]))
@@ -634,10 +629,6 @@ class Model(nn.Module):
             logger.info("Current BL: {}".format(np.mean(self.rewards)))
 
         elif chunk_type == "lcs-all":
-            #def token_lcs_reward(gold, pred):
-                # based on https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Longest_common_substring#Python
-                # idea from http://www.aclweb.org/anthology/P18-2052
-                # adapted to all longest substrings
             def all_longest_common_substring_rewards(pred, gold):
                 m = [[0] * (1 + len(gold)) for i in range(1 + len(pred))]
                 # collect all length of all longest spans here
@@ -646,7 +637,9 @@ class Model(nn.Module):
                 rewards = np.zeros(len(pred))
                 for x in range(1, 1 + len(pred)):
                     for y in range(1, 1 + len(gold)):
-                        if pred[x - 1] == gold[y - 1] and pred[x-1] != self.pad_index and gold[y-1] != self.pad_index:
+                        if pred[x - 1] == gold[y - 1] and \
+                                        pred[x-1] != self.pad_index and \
+                                        gold[y-1] != self.pad_index:
                             m[x][y] = m[x - 1][y - 1] + 1
                             if m[x][y] >= longest:
                                 old = len_start.get(m[x][y], set())
@@ -658,27 +651,26 @@ class Model(nn.Module):
 
                         else:
                             m[x][y] = 0
-                #rewards[x_longest - longest: x_longest] = 1
                 if len(len_start) > 0:  # skipped if no overlap found
                     for pos in len_start[longest]:
                         rewards[pos - longest: pos] = 1
-                    #return pred[x_longest - longest: x_longest]
                 return rewards
 
             all_rewards = np.zeros_like(sample_hyp, dtype=float)
             if type(sample_hyp) is torch.Tensor:
                 sample_hyp = sample_hyp.cpu().numpy()
                 sample_hyp_mask = sample_hyp_mask.cpu().numpy()
-            for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):  # iterate over batch
+            # iterate over batch
+            for j, (g, p) in enumerate(zip(trg_np, sample_hyp)):
                 r = all_longest_common_substring_rewards(p, g)
                 for i, r_i in enumerate(r):
                     all_rewards[j, i] = r_i
-            # TODO remove rewards for duplications: only reinforce as often as in reference
 
             if weak_baseline:
                 if len(self.rewards) > 0:
                     # subtract mean from reward
-                    new_rewards = (all_rewards - np.mean(self.rewards))*sample_hyp_mask
+                    new_rewards = (all_rewards - np.mean(self.rewards)) * \
+                                  sample_hyp_mask
                 else:
                     new_rewards = all_rewards
                 # update baseline
@@ -692,26 +684,20 @@ class Model(nn.Module):
             else:
                 new_rewards = all_rewards
 
-            #if weak_baseline:
-            #    # baseline over time
-            #    # TODO over batch?
-            #    all_rewards -= np.mean(all_rewards, axis=1, keepdims=True)
-
-            chunk_loss = (sample_nll * src_mask.new(new_rewards*sample_hyp_mask).float()).sum(1)
+            chunk_loss = (sample_nll * src_mask.new(
+                new_rewards*sample_hyp_mask).float()).sum(1)
 
             costs = all_rewards.sum(-1)
 
             logger.info("Examples from weak supervision:")
-            for hyp, ref, src, logprob, mark, cost in zip(hyps_decoded_list[:3],
-                                               refs_np_decoded_list[:3],
-                                                decoded_srcs[:3],
-                                               -sample_nll[:3].sum(1),
-                                               new_rewards[:3],
-                                                            costs[:3]):
+            for hyp, ref, src, logprob, mark, cost in zip(
+                    hyps_decoded_list[:3], refs_np_decoded_list[:3],
+                    decoded_srcs[:3], -sample_nll[:3].sum(1), new_rewards[:3],
+                    costs[:3]):
                 logger.info("\tSrc: {}".format(src))
                 logger.info(
-                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
-                                                        logprob))
+                    "\t{} (cased: {}) for weak: {} ({:.3f})".format(
+                        weak_search, case_sensitive, hyp, logprob))
                 logger.info("\tReference: {}".format(ref))
                 logger.info(
                     "\tLCS-ALL: {}".format([(h, m) for h, m in zip(hyp, mark)]))
@@ -723,7 +709,8 @@ class Model(nn.Module):
             if chunk_type == "sbleu":
                 assert len(refs_np_decoded) == len(hyps_decoded)
                 # compute sBLEUs
-                sbleus = np.array(sbleu(hyps_decoded, refs_np_decoded, case_sensitive=case_sensitive))
+                sbleus = np.array(sbleu(hyps_decoded, refs_np_decoded,
+                                        case_sensitive=case_sensitive))
                 rewards = sbleus
 
             elif chunk_type == "sgleu":
@@ -734,14 +721,12 @@ class Model(nn.Module):
                 rewards = sgleus
 
             elif chunk_type == "ster":
-                sters = np.array(ster(hyps_decoded_list, refs_np_decoded_list, case_sensitive=case_sensitive))
+                sters = np.array(ster(hyps_decoded_list, refs_np_decoded_list,
+                                      case_sensitive=case_sensitive))
                 rewards = 1-sters
 
-            # TODO or constant cost?
-            # TODO make this more sophisticated
             # cost is length of hyp
             costs = [len(h) for h in hyps_decoded]
-            # print("COSTS", costs)
 
             if logger is not None:
                 logger.info("Examples from weak supervision:")
@@ -753,13 +738,12 @@ class Model(nn.Module):
                                                 costs[:3]):
                     logger.info("\tSrc: {}".format(src))
                     logger.info(
-                        "\t{} (cased: {}) for weak: {} ({:.3f})".format(weak_search, case_sensitive, hyp,
-                                                            logprob))
+                        "\t{} (cased: {}) for weak: {} ({:.3f})".format(
+                            weak_search, case_sensitive, hyp, logprob))
                     logger.info("\tReference: {}".format(ref))
                     logger.info(
-                        "\tReward: {:.3f} {} (BL: {:.3f})".format(r, chunk_type,
-                                                                  np.mean(
-                                                                      self.rewards)))
+                        "\tReward: {:.3f} {} (BL: {:.3f})".format(
+                            r, chunk_type, np.mean(self.rewards)))
                     logger.info("\tCost: {}".format(cost))
             if weak_baseline:
                 if len(self.rewards) > 0:
@@ -774,34 +758,6 @@ class Model(nn.Module):
 
             # make update with baselined rewards
             chunk_loss = sample_nll.sum(1) * src_mask.new(new_rewards).float()
-
-
-        # compute cost
-        # word-based -> need to decode
-        # how many words occur do not occur in the ref? = #markings
-        # ratio: #markings/hyp_len
-        # or rather absolute?
-        # maybe add 1 as constant since "accept" if not any error
-        #costs = []
-        #print("refs", refs_np_decoded)
-        #print("hyps", hyps_decoded)
-        # TODO doesn't really work for sentence-level markings
-        # now: max(1, min(neg_markings, pos_markings))
-       # for ref_decoded, hyp_decoded in zip(refs_np_decoded, hyps_decoded):
-       #     missing = 0
-       #     not_missing = 0
-       #     for hyp_token in hyp_decoded.split(" "):
-       #         if hyp_token not in ref_decoded.split(" "):
-       #             missing += 1
-       #         else:
-       #             not_missing += 1
-      #      costs.append(max(1, min(missing, not_missing)))
-        #print(costs)
-
-        # other way around: how many words occur in ref?
-        # or: how many got a reward of 1?
-        # or min(#1s, #0s)
-        # how many were selected?
 
         assert len(costs) == selected_batch_size
 
@@ -822,7 +778,21 @@ class Model(nn.Module):
         loss: -log_p(reference | x)
 
         :param selection:
-        :param src_mask:
+        :param batch_src_mask:
+        :param decoder_out:
+        :param criterion:
+        :param target:
+        :param max_output_length:
+        :param encoder_hidden:
+        :param encoder_out:
+        :param level:
+        :param beam_alpha:
+        :param beam_size:
+        :param logger:
+        :param pe_ratio:
+        :param hyps:
+        :param hyp_masks:
+        :param hyp_inputs:
         :return:
         """
         selected_target = torch.index_select(target, index=selection, dim=0)
@@ -835,29 +805,22 @@ class Model(nn.Module):
         selected_batch_size = selection.shape[0]
         selected_src_mask = torch.index_select(batch_src_mask,
                                                index=selection, dim=0)
-        selected_tokens = (selected_target != self.pad_index).sum().cpu().numpy()
+        selected_tokens = (selected_target != self.pad_index).sum().cpu().\
+            numpy()
 
-        # compute log probs of teacher-forced decoder for fully-supervised training
+        # compute log probs of teacher-forced decoder for
+        # fully-supervised training
         tf_log_probs = F.log_softmax(selected_decoder_out, dim=-1)
         # in case of full supervision (teacher forcing with post-edit)
         full_sup_loss = criterion(
             input=tf_log_probs.contiguous().view(-1, tf_log_probs.size(-1)),
-            target=selected_target.contiguous().view(-1)).view(selected_batch_size, -1).sum(-1)
+            target=selected_target.contiguous().view(-1)).view(
+            selected_batch_size, -1).sum(-1)
 
         if hyps is not None and hyp_inputs is not None and hyp_masks is not None:
             # use logged hyp instead of bs output
             selected_hyps = torch.index_select(hyps, index=selection, dim=0)
-            selected_hyp_inputs = torch.index_select(hyp_inputs,
-                                                     index=selection, dim=0)
-            selected_hyp_masks = torch.index_select(hyp_masks, index=selection,
-                                                    dim=0)
-            # logger.info("WEAK USING LOGGED HYP INSTEAD OF SAMPLE: {}".format(selected_hyps))
-            # instead of sampling from the current model, take the log hypothesis
             selected_output = selected_hyps
-            #sample_hyp_mask = selected_hyp_masks
-            #sample_hyp_inputs = selected_hyp_inputs
-            #sample_target = sample_hyp
-            #selected_tokens = sample_hyp_mask.sum().cpu().numpy()
 
         else:
             # decode
@@ -874,20 +837,16 @@ class Model(nn.Module):
 
         join_char = " " if level in ["word", "bpe"] else ""
 
-        decoded_refs = [join_char.join(t) for t in arrays_to_sentences(selected_target,
-                                          vocabulary=self.trg_vocab)]
-        decoded_ref_list = [t.split(" ") for t in decoded_refs]
-        #print("decoded_refs", decoded_refs)
-        decoded_hyps = [join_char.join(t) for t in arrays_to_sentences(selected_output,
-                                          vocabulary=self.trg_vocab)]
-        decoded_hyp_list = [t.split(" ") for t in decoded_hyps]
+        decoded_refs = [join_char.join(t) for t in arrays_to_sentences(
+            selected_target, vocabulary=self.trg_vocab)]
+        decoded_hyps = [join_char.join(t) for t in arrays_to_sentences(
+            selected_output, vocabulary=self.trg_vocab)]
 
         # compute cost: character edit distance? = number of characters to type
         chr_edit_distances = [pyter.edit_distance(list(h), list(r)) for h, r in
                               zip(decoded_hyps, decoded_refs)]
         costs = chr_edit_distances
 
-        # TODO problematic: character edits -> might not be found in vocab
         if pe_ratio < 1.0:
             logger.info("PE ratio {}".format(pe_ratio))
             # white spaces and BPE marker are not considered for edit distance
@@ -897,13 +856,10 @@ class Model(nn.Module):
             for h, r in zip(decoded_hyps, decoded_refs):
                 logger.info("hyp: {}".format(h))
                 logger.info("ref: {}".format(r))
-                #print("ref", r)
-                #s.set_seq1(r)
-                #s.set_seq2(h)
-                #print(s.get_opcodes())
-                #print([g for g in s.get_grouped_opcodes()])
+
                 def edit(a, b, ratio=0.5):
-                    # ratio: ratio of edit operations to perform (of those needed to reach reference)
+                    # ratio: ratio of edit operations to perform
+                    # (of those needed to reach reference)
                     i = 0
                     j = 0
                     cost = 0 # number of characters touched
@@ -912,54 +868,35 @@ class Model(nn.Module):
                     codes = s.get_opcodes()
                     n = len([c[0] for c in codes if c[0] != "equal" ])*ratio
                     while i < n and j < len(codes):
-                        #print("a", a)
-                        #print("b", b)
-                        #print("code", codes[j])
                         to_execute = codes[j]
                         if to_execute[0] == "equal":
                             j += 1
                             continue
                         elif to_execute[0] == "replace":
-                            #print(a[to_execute[1]:to_execute[2]])
-                            #print(b[to_execute[3]:to_execute[4]])
-                            #print("a before replacement", a)
-                            rep_len = len(b[to_execute[3]: to_execute[4]].replace("@", ""))
-                            #print("rep len", rep_len)
-                            a = a[:to_execute[1]] + b[to_execute[3]:to_execute[4]] + a[to_execute[2]:]
-                            #print("after replacement", a)
-                            #print("replace cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
-                            cost += rep_len #max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            rep_len = len(b[to_execute[3]:
+                            to_execute[4]].replace("@", ""))
+                            a = a[:to_execute[1]] + b[to_execute[3]:
+                            to_execute[4]] + a[to_execute[2]:]
+                            cost += rep_len
                             i += 1
                             s.set_seq1(a)
                             codes = s.get_opcodes()
                         elif to_execute[0] == "insert":
-                            #print("a before insertion", a)
-                            #print(a[to_execute[1]:to_execute[2]])
-                            #print(b[to_execute[3]:to_execute[4]])
-                            insert_len = len(b[to_execute[3]:to_execute[4]].replace("@", ""))
-                            #print("insert len", insert_len)
-                            a = a[:to_execute[2]] + b[to_execute[3]:to_execute[4]] + a[to_execute[2]:]
-                            #print("a after insertion", a)
-                            #print("insert cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
-                            cost += insert_len #max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            insert_len = len(b[to_execute[3]:
+                            to_execute[4]].replace("@", ""))
+                            a = a[:to_execute[2]] + b[to_execute[3]:
+                            to_execute[4]] + a[to_execute[2]:]
+                            cost += insert_len
                             i += 1
                             s.set_seq1(a)
                             codes = s.get_opcodes()
                         elif to_execute[0] == "delete":
-                            #print(a[to_execute[1]:to_execute[2]])
-                            #print(b[to_execute[3]:to_execute[4]])
-                            # deduce the number of @s in the edited sequence to get correct cost
-                            del_len = len(a[to_execute[1]:to_execute[2]].replace("@", ""))
-                            #print("DEL LEN", del_len)
-                            #print("before deletion", a)
+                            # deduce the number of @s in the edited sequence
+                            # to get correct cost
+                            del_len = len(a[to_execute[1]:
+                            to_execute[2]].replace("@", ""))
                             a = a[:to_execute[1]] + a[to_execute[2]:]
-                            #print("after deletion", a)
-                            #print(a[:to_execute[1]])#.replace(" ", ""))
-                            #print(a[:to_execute[2]]) #.replace(" ", ""))
-
-                            #print("delete cost", max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3]))
-
-                            cost += del_len #max(to_execute[2]-to_execute[1], to_execute[4]-to_execute[3])
+                            cost += del_len
                             i += 1
                             s.set_seq1(a)
                             codes = s.get_opcodes()
@@ -971,15 +908,11 @@ class Model(nn.Module):
                 post_edits.append(post_edited_h)
                 costs.append(edit_cost)
 
-
-            #print("edit distances", chr_edit_distances, sum(chr_edit_distances))
-
-            #pe_edit_distances = [pyter.edit_distance(list(p), list(r)) for p, r in zip(post_edits, decoded_refs)]
-            #print("after pe", pe_edit_distances, sum(pe_edit_distances))
-
             # now represent as indices
-            pe_indices = sentences_to_arrays([p.split(" ") for p in post_edits], vocabulary=self.trg_vocab, pad_index=self.pad_index, max_length=selected_target.shape[1])
-                                             #max_length=max_output_length)
+            pe_indices = sentences_to_arrays([p.split(" ") for p in post_edits],
+                                             vocabulary=self.trg_vocab,
+                                             pad_index=self.pad_index,
+                                             max_length=selected_target.shape[1])
 
             # add BOS
             bos_array = np.full(shape=(selected_batch_size, 1),
@@ -987,54 +920,56 @@ class Model(nn.Module):
             # prepend bos but cut off one bos
             pe_pad_bos = np.concatenate((bos_array, pe_indices),
                                                 axis=1)[:, :-1]
-
-            #print("PE INPUT", pe_pad_bos)
-            #print("PE TRG", pe_indices)
             # teacher-force with PE now
             pe_out, _, _, _ = self.decode(encoder_output=selected_encoder_out,
-                                              encoder_hidden=selected_encoder_hidden,
-                                              trg_input=selected_src_mask.new(
-                                                  pe_pad_bos).long(),
-                                              src_mask=selected_src_mask,
-                                              unrol_steps=pe_pad_bos.shape[
-                                                  1])
+                                          encoder_hidden=selected_encoder_hidden,
+                                          trg_input=selected_src_mask.new(
+                                              pe_pad_bos).long(),
+                                          src_mask=selected_src_mask,
+                                          unrol_steps=pe_pad_bos.shape[1])
 
             pe_log_probs = F.log_softmax(pe_out, dim=-1)
 
-            # TODO what happens with BPEs?
-            #print(arrays_to_sentences(pe_indices, vocabulary=self.trg_vocab, cut_at_eos=False))
             pe_sup_loss = criterion(
                 input=pe_log_probs.contiguous().view(-1, pe_log_probs.size(-1)),
                 target=tf_log_probs.new(pe_indices).long().contiguous().view(-1)).view(
                 selected_batch_size, -1).sum(-1)
             full_sup_loss = pe_sup_loss
-        #print("PE loss", pe_sup_loss)
-        #print("full sup loss", full_sup_loss)
 
-
-        # compute cost: TER*ref_len -> absolute number of edits
-        #print("decoded_hyp", decoded_hyp)
-        #ters = ster(hypotheses=decoded_hyp_list, references=decoded_ref_list)
-        #print("ters", ters)
-        #ref_lens = [len(t) for t in decoded_ref_list]
-        #print("ref lens", ref_lens)
-        #costs = [r*c for r, c in zip(ters, ref_lens)]
-        #print("#edits", costs)
         assert full_sup_loss.size(0) == selected_batch_size
         return full_sup_loss.sum(), selected_tokens, selected_batch_size, costs
-        #return pe_sup_loss.sum(), selected_tokens, selected_batch_size, costs
 
     def get_loss_for_batch(self, batch, criterion, regulate=False, pred=False,
-                           max_output_length=100, chunk_type="marking", level="word",
-                           entropy=False, weak_search="sample", weak_baseline=True,
-                           weak_temperature=1.0, logger=None, case_sensitive=True,
+                           max_output_length=100, chunk_type="marking",
+                           level="word", entropy=False, weak_search="sample",
+                           weak_baseline=True,
+                           weak_temperature=1.0, logger=None,
+                           case_sensitive=True,
                            pe_ratio=1.0, beam_size=10, beam_alpha=1.,
-                           self_attention_drop=0.0, epsilon=0.5, regulator_sample=True):
+                           self_attention_drop=0.0, epsilon=0.5,
+                           regulator_sample=True):
         """
         Compute non-normalized loss and number of tokens for a batch
 
+        :param case_sensitive:
         :param batch:
         :param criterion:
+        :param regulate:
+        :param pred:
+        :param max_output_length:
+        :param chunk_type:
+        :param level:
+        :param entropy:
+        :param weak_search:
+        :param weak_baseline:
+        :param logger:
+        :param pe_ratio:
+        :param beam_alpha:
+        :param beam_size:
+        :param self_attention_drop:
+        :param epsilon:
+        :param regulator_sample:
+        :param weak_temperature:
         :return:
         """
         encoder_out, encoder_hidden, decoder_out = \
@@ -1073,36 +1008,20 @@ class Model(nn.Module):
                 hyp = batch.src.new(hyp).long()
             else:
                 hyp = None
-            #bos_array = np.full(shape=(batch_size, 1),
-            #                    fill_value=self.bos_index)
-            # prepend bos but cut off one bos
-            #sample_hyp_pad_bos = np.concatenate((bos_array, bs_hyp),
-            #                                    axis=1)[:, :-1]
-            # print("with bos", bs_hyp_pad_bos)
-
-            # treat bs output as target for forced decoding to get log likelihood of bs output
-            #sample_out, _, _, _ = self.decode(
-            #    encoder_output=encoder_out,
-            #    encoder_hidden=encoder_hidden,
-            #    trg_input=batch.src_mask.new(
-            #        sample_hyp_pad_bos).long(),
-            #    src_mask=batch.src_mask,
-            #    unrol_steps=sample_hyp_pad_bos.shape[1])
-            #sample_log_probs = F.log_softmax(sample_out, dim=-1)
 
             # iterate over batch:
-            previous_output = batch.src.new_zeros(1, self.regulator.output_size).float()
+            previous_output = batch.src.new_zeros(
+                1, self.regulator.output_size).float()
             hidden_regulator = None
             regulator_out = []
             # TODO doesn't work if feed_trg is False
             for s, l, h in zip(batch.src, batch.src_lengths, hyp):
-                hidden_regulator, previous_output = self.regulate(s.unsqueeze(0), #batch.src,
-                                              l.unsqueeze(0), #batch.src_lengths,
-                                              # smooth prev output
-                                              hidden_regulator = hidden_regulator,
-                                                # TODO without detach
-                                              previous_output=F.softmax(previous_output, dim=1).detach(),
-                                              hyp=h.unsqueeze(0))  # bs_target)
+                hidden_regulator, previous_output = \
+                    self.regulate(s.unsqueeze(0), l.unsqueeze(0),
+                                  hidden_regulator=hidden_regulator,
+                                  previous_output=F.softmax(
+                                      previous_output, dim=1).detach(),
+                                  hyp=h.unsqueeze(0))
                 regulator_out.append(previous_output)
             regulator_out = torch.cat(regulator_out, dim=0)
             reg_log_probs = F.log_softmax(regulator_out, dim=-1)
@@ -1113,14 +1032,12 @@ class Model(nn.Module):
                 reg_pred = reg_dist.sample()
             else:
                 reg_pred = torch.argmax(reg_log_probs, dim=-1)
-                #logger.info("GREEDY OPTION {}".format(reg_pred))
-                #logger.info("log probs {}".format(reg_log_probs))
 
             # heuristic: always choose one type of supervision
             if pred is not False:
                 if pred == "random-fixed":
-                    rns = np.random.uniform(low=0.0, high=1.0, size=(batch_size))
-                    fill_value = np.zeros(shape=(batch_size))
+                    rns = np.random.uniform(low=0.0, high=1.0, size=batch_size)
+                    fill_value = np.zeros(shape=batch_size)
                     selft = 0.8
                     weakt = 0.9
                     for k, rn in enumerate(rns):
@@ -1135,33 +1052,38 @@ class Model(nn.Module):
                             regulator_out.device).long()
                 elif pred == "random":
                     # random choice
-                    fill_value = np.random.randint(0, self.regulator.output_size,
+                    fill_value = np.random.randint(0,
+                                                   self.regulator.output_size,
                                                    size=batch_size)
                     reg_pred = torch.from_numpy(
-                        np.full(shape=(batch_size), fill_value=fill_value)).to(
+                        np.full(shape=batch_size, fill_value=fill_value)).to(
                         regulator_out.device).long()
                 elif pred == "uniform":
                     # fixed choice: [0, 1, 2, 3, 0, 1, 2, 3, 4 ... ]
                     reg_pred = torch.from_numpy(
-                        (np.array([i for i in range(0, self.regulator.output_size)]
-                         *batch_size)[:batch_size])).to(regulator_out.device).long()
+                        (np.array([i for i in range(
+                            0, self.regulator.output_size)] *
+                                  batch_size)[:batch_size])).to(
+                        regulator_out.device).long()
                 elif pred == "epsilon":
                     # epsilon-greedy
                     # draw random number between 0 and 1
-                    exploit = np.random.uniform(low=0.0, high=1.0, size=(batch_size)) > epsilon
-                    reg_pred = np.zeros(shape=(batch_size))
+                    exploit = np.random.uniform(low=0.0, high=1.0,
+                                                size=batch_size) > epsilon
+                    reg_pred = np.zeros(shape=batch_size)
                     # if larger than epsilon: pick best action so far
                     for k, e in enumerate(exploit):
                         if e:
-                            #print("REWARD STATS",self.rewards_per_output)
-                            #print("COST STATS", self.costs_per_output)
-                            stats = [np.mean(np.array(self.rewards_per_output[i])-np.array(self.costs_per_output[i])) if len(self.rewards_per_output[i]) > 0 else 0 for i in range(self.regulator.output_size)]
-                            #print("EXPLOIT", stats, np.argmax(stats))
+                            stats = [np.mean(np.array(
+                                self.rewards_per_output[i])-np.array(
+                                self.costs_per_output[i])) if len(
+                                self.rewards_per_output[i]) > 0 else 0 for i in
+                                     range(self.regulator.output_size)]
                             fill_value = np.argmax(stats)
                         # otherwise: pick one uniformly
                         else:
-                            #print("EXPLORE")
-                            fill_value = np.random.randint(0, high=self.regulator.output_size)
+                            fill_value = np.random.randint(
+                                0, high=self.regulator.output_size)
                         reg_pred[k] = fill_value
                     reg_pred = torch.from_numpy(reg_pred).to(
                         regulator_out.device).long()
@@ -1177,49 +1099,49 @@ class Model(nn.Module):
                     # epsilon-greedy
                     # draw random number between 0 and 1
                     exploit = np.random.uniform(low=0.0, high=1.0) > epsilon
-                    reg_pred = np.zeros(shape=(batch_size))
                     # if larger than epsilon: pick best action so far
                     if exploit:
-                        #print("REWARD STATS",self.rewards_per_output)
-                        #print("COST STATS", self.costs_per_output)
-                        stats = [np.mean(np.array(self.rewards_per_output[i])-np.array(self.costs_per_output[i])) if len(self.rewards_per_output[i]) > 0 else 0 for i in range(self.regulator.output_size)]
-                        #print("EXPLOIT", stats, np.argmax(stats))
+                        stats = [np.mean(np.array(
+                            self.rewards_per_output[i])-np.array(
+                            self.costs_per_output[i])) if len(
+                            self.rewards_per_output[i]) > 0 else 0 for i in
+                                 range(self.regulator.output_size)]
                         fill_value = np.argmax(stats)
                     # otherwise: pick one uniformly
                     else:
-                        #print("EXPLORE")
                         fill_value = np.random.randint(0, high=self.regulator.output_size)
                     reg_pred = torch.from_numpy(
                         np.full(shape=(batch_size), fill_value=fill_value)).to(
                         regulator_out.device).long()
                 elif pred == "user":
-                    # choose according to HTER: TODO never none
+                    # choose according to HTER:
                     # if perfect: do self-training
                     # if great: weak feedback
                     # if okay: full feedback
-                    sample_hyp, _ = beam_search(size=beam_size,
-                                                encoder_output=encoder_out,
-                                                encoder_hidden=encoder_hidden,
-                                                src_mask=batch.src_mask,
-                                                embed=self.trg_embed,
-                                                max_output_length=max_output_length,
-                                                alpha=beam_alpha,
-                                                eos_index=self.eos_index,
-                                                pad_index=self.pad_index,
-                                                bos_index=self.bos_index,
-                                                decoder=self.decoder)
-                    decoded_hyps = arrays_to_sentences(sample_hyp, vocabulary=self.trg_vocab)
-                    decoded_refs = arrays_to_sentences(batch.trg, vocabulary=self.trg_vocab)
-                    #if level == "bpe":
-                    #    decoded_hyps = [d.replace("@@ ", "") for d in decoded_hyps]
+                    sample_hyp, _ = beam_search(
+                        size=beam_size, encoder_output=encoder_out,
+                        encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
+                        embed=self.trg_embed,
+                        max_output_length=max_output_length,
+                        alpha=beam_alpha, eos_index=self.eos_index,
+                        pad_index=self.pad_index,  bos_index=self.bos_index,
+                        decoder=self.decoder)
+                    decoded_hyps = arrays_to_sentences(
+                        sample_hyp, vocabulary=self.trg_vocab)
+                    decoded_refs = arrays_to_sentences(
+                        batch.trg, vocabulary=self.trg_vocab)
+
                     join_char = "" if level == "char" else " "
-                    bleus = sbleu(hypotheses=[join_char.join(d).replace("@@ ", "") for d in decoded_hyps],
-                                  references=[join_char.join(r).replace("@@ ", "") for r in decoded_refs])
+                    bleus = sbleu(
+                        hypotheses=[join_char.join(d).replace("@@ ", "") for
+                                    d in decoded_hyps],
+                        references=[join_char.join(r).replace(
+                                      "@@ ", "") for r in decoded_refs])
                     # collect all ters
                     self.bleus.extend(bleus)
                     good = np.percentile(a=self.bleus, q=10, axis=0)
                     very_good = np.percentile(a=self.bleus, q=20, axis=0)
-                    fill_value = np.zeros(shape=(batch_size))
+                    fill_value = np.zeros(shape=batch_size)
                     for i, ter in enumerate(bleus):
                         if ter > very_good:
                             # self-supervision
@@ -1229,31 +1151,25 @@ class Model(nn.Module):
                             label = "weak"
                         else:  # full feedback
                             label = "full"
-                        # TODO no skipping
                         fill_value[i] = self.regulator.label2index[label]
                     reg_pred = torch.from_numpy(fill_value).to(
                         regulator_out.device).long()
 
                 elif pred == "uncertainty":
-                    sample_hyp, _ = beam_search(size=beam_size,
-                                                encoder_output=encoder_out,
-                                                encoder_hidden=encoder_hidden,
-                                                src_mask=batch.src_mask,
-                                                embed=self.trg_embed,
-                                                max_output_length=max_output_length,
-                                                alpha=beam_alpha,
-                                                eos_index=self.eos_index,
-                                                pad_index=self.pad_index,
-                                                bos_index=self.bos_index,
-                                                decoder=self.decoder)
+                    sample_hyp, _ = beam_search(
+                        size=beam_size, encoder_output=encoder_out,
+                        encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
+                        embed=self.trg_embed,
+                        max_output_length=max_output_length, alpha=beam_alpha,
+                        eos_index=self.eos_index, pad_index=self.pad_index,
+                        bos_index=self.bos_index, decoder=self.decoder)
                     bos_array = np.full(shape=(batch_size, 1),
                                         fill_value=self.bos_index)
                     # prepend bos but cut off one bos
                     sample_hyp_pad_bos = np.concatenate((bos_array, sample_hyp),
                                                         axis=1)[:, :-1]
-                    # print("with bos", bs_hyp_pad_bos)
-
-                    # treat bs output as target for forced decoding to get log likelihood of bs output
+                    # treat bs output as target for forced decoding to get log
+                    # likelihood of bs output
                     sample_out, _, _, _ = self.decode(
                         encoder_output=encoder_out,
                         encoder_hidden=encoder_hidden,
@@ -1263,9 +1179,9 @@ class Model(nn.Module):
                         unrol_steps=sample_hyp_pad_bos.shape[1])
                     sample_log_probs = F.log_softmax(sample_out, dim=-1)
 
-                    #print("sample log probs", sample_log_probs.shape)  # batch x time x vocab
-                    avg_sample_entropy = -torch.sum(sample_log_probs*torch.exp(sample_log_probs), dim=2).mean(dim=1).detach().cpu().numpy()
-                    #print("entropy", avg_sample_entropy)
+                    avg_sample_entropy = -torch.sum(
+                        sample_log_probs*torch.exp(sample_log_probs),
+                        dim=2).mean(dim=1).detach().cpu().numpy()
 
                     self.entropies.extend(avg_sample_entropy)
                     #okay = np.percentile(a=self.entropies, q=50, axis=0)
@@ -1301,7 +1217,6 @@ class Model(nn.Module):
                     reg_pred = torch.from_numpy(
                         np.full(shape=(batch_size), fill_value=fill_value)).to(
                         regulator_out.device).long()
-                # print("regulator prediction", reg_pred)
 
             batch_loss = 0
             batch_tokens = 0
@@ -1335,16 +1250,18 @@ class Model(nn.Module):
                 ones_idx = ones.nonzero().squeeze(1)
                 # compute self-train loss for those (smaller batch)
                 self_sup_loss_selected, tokens, seqs = self._self_sup_loss(
-                    selection=ones_idx, encoder_out=encoder_out, entropy=entropy,
+                    selection=ones_idx, encoder_out=encoder_out,
+                    entropy=entropy,
                     encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
                     max_output_length=max_output_length, criterion=criterion,
                     logger=logger, target=batch.trg, level=level,
                     beam_size=beam_size, beam_alpha=beam_alpha,
                     attention_drop=self_attention_drop,
                     hyps=batch.hyp if hasattr(batch, 'hyp') else None,
-                    hyp_inputs=batch.hyp_input if hasattr(batch, 'hyp_input') else None,
-                    hyp_masks=batch.hyp_mask if hasattr(batch, 'hyp_mask') else None)
-                #print("self sup selected", self_sup_loss_selected)
+                    hyp_inputs=batch.hyp_input if hasattr(
+                        batch, 'hyp_input') else None,
+                    hyp_masks=batch.hyp_mask if hasattr(
+                        batch, 'hyp_mask') else None)
                 batch_loss += self_sup_loss_selected.sum()
                 batch_tokens += tokens
                 batch_seqs += seqs
@@ -1355,18 +1272,24 @@ class Model(nn.Module):
                 # compute weak-sup. loss for those
                 twos = torch.eq(reg_pred, weak_index)
                 twos_idx = twos.nonzero().squeeze(1)
-                weak_sup_loss_selected, tokens, seqs, costs = self._weak_sup_loss(
-                    selection=twos_idx, src=batch.src, encoder_out=encoder_out,
-                    encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
-                    max_output_length=max_output_length, criterion=criterion,
-                    chunk_type=chunk_type, level=level,
-                    target=batch.trg, weak_temperature=weak_temperature,
-                    weak_search=weak_search, beam_size=beam_size, beam_alpha=beam_alpha,
-                    weak_baseline=weak_baseline, logger=logger, case_sensitive=case_sensitive,
-                    hyps=batch.hyp if hasattr(batch, 'hyp') else None,
-                    hyp_inputs=batch.hyp_input if hasattr(batch, 'hyp_input') else None,
-                    hyp_masks=batch.hyp_mask if hasattr(batch, 'hyp_mask') else None)
-                #print("weak sup selected", weak_sup_loss_selected)
+                weak_sup_loss_selected, tokens, seqs, costs = \
+                    self._weak_sup_loss(
+                        selection=twos_idx, src=batch.src,
+                        encoder_out=encoder_out,
+                        encoder_hidden=encoder_hidden, src_mask=batch.src_mask,
+                        max_output_length=max_output_length,
+                        criterion=criterion,
+                        chunk_type=chunk_type, level=level,
+                        target=batch.trg, weak_temperature=weak_temperature,
+                        weak_search=weak_search, beam_size=beam_size,
+                        beam_alpha=beam_alpha,
+                        weak_baseline=weak_baseline, logger=logger,
+                        case_sensitive=case_sensitive,
+                        hyps=batch.hyp if hasattr(batch, 'hyp') else None,
+                        hyp_inputs=batch.hyp_input if
+                            hasattr(batch, 'hyp_input') else None,
+                        hyp_masks=batch.hyp_mask if
+                            hasattr(batch, 'hyp_mask') else None)
                 batch_loss += weak_sup_loss_selected.sum()
                 batch_tokens += tokens
                 batch_seqs += seqs
@@ -1379,17 +1302,21 @@ class Model(nn.Module):
                 # compute fully-sup. loss for those
                 threes = torch.eq(reg_pred, full_index)
                 threes_idx = threes.nonzero().squeeze(1)
-                full_sup_loss_selected, tokens, seqs, costs = self._full_sup_loss(
-                    selection=threes_idx, decoder_out=out,
-                    criterion=criterion, target=batch.trg,
-                    encoder_hidden=encoder_hidden, level=level,
-                    beam_size=beam_size, beam_alpha=beam_alpha,
-                    encoder_out=encoder_out, max_output_length=max_output_length,
-                    batch_src_mask=batch.src_mask, logger=logger, pe_ratio=pe_ratio,
-                    hyps=batch.hyp if hasattr(batch, 'hyp') else None,
-                    hyp_inputs=batch.hyp_input if hasattr(batch, 'hyp_input') else None,
-                    hyp_masks=batch.hyp_mask if hasattr(batch, 'hyp_mask') else None)
-               # print("full sup selected", full_sup_loss_selected)
+                full_sup_loss_selected, tokens, seqs, costs = \
+                    self._full_sup_loss(
+                        selection=threes_idx, decoder_out=out,
+                        criterion=criterion, target=batch.trg,
+                        encoder_hidden=encoder_hidden, level=level,
+                        beam_size=beam_size, beam_alpha=beam_alpha,
+                        encoder_out=encoder_out,
+                        max_output_length=max_output_length,
+                        batch_src_mask=batch.src_mask, logger=logger,
+                        pe_ratio=pe_ratio,
+                        hyps=batch.hyp if hasattr(batch, 'hyp') else None,
+                        hyp_inputs=batch.hyp_input
+                            if hasattr(batch, 'hyp_input') else None,
+                        hyp_masks=batch.hyp_mask
+                            if hasattr(batch, 'hyp_mask') else None)
                 batch_loss += full_sup_loss_selected
                 batch_tokens += tokens
                 batch_seqs += seqs

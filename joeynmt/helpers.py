@@ -96,6 +96,7 @@ def build_vocab(field, max_size, min_freq, data, vocab_file=None):
 
     return vocab
 
+
 def sentence_to_array(sentence, vocabulary, max_length, pad_index):
     """
     Converts a sentence into a sequence of IDs, padded up or cut to max_length
@@ -120,6 +121,7 @@ def sentence_to_array(sentence, vocabulary, max_length, pad_index):
             array[i-1] = vocabulary.stoi[EOS_TOKEN]
     return array
 
+
 def sentences_to_arrays(sentences, vocabulary, max_length, pad_index):
     """
     Converts multiple sentences into their ids
@@ -131,6 +133,7 @@ def sentences_to_arrays(sentences, vocabulary, max_length, pad_index):
     :return:
     """
     return np.stack([sentence_to_array(s, vocabulary=vocabulary, max_length=max_length, pad_index=pad_index) for s in sentences])
+
 
 def array_to_sentence(array, vocabulary, cut_at_eos=True):
     """
@@ -320,14 +323,20 @@ class PEDataset(TranslationDataset):
                 data.Dataset.
         """
         if not isinstance(fields[0], (tuple, list)):
-            fields = [('src', fields[0]), ('trg', fields[1]), ('hyp', fields[2])]
+            fields = [('src', fields[0]), ('trg', fields[1]),
+                      ('hyp', fields[2])]
 
-        src_path, trg_path, hyp_path = tuple(os.path.expanduser(path + x) for x in exts)
+        src_path, trg_path, hyp_path = tuple(
+            os.path.expanduser(path + x) for x in exts)
 
         examples = []
-        with open(src_path) as src_file, open(trg_path) as trg_file, open(hyp_path) as hyp_file:
-            for src_line, trg_line, hyp_line in zip(src_file, trg_file, hyp_file):
-                src_line, trg_line, hyp_line = src_line.strip(), trg_line.strip(), hyp_line.strip()
+        with open(src_path) as src_file, open(trg_path) as trg_file, \
+                open(hyp_path) as hyp_file:
+            for src_line, trg_line, hyp_line in zip(
+                    src_file, trg_file, hyp_file):
+                src_line, trg_line, hyp_line = src_line.strip(), \
+                                               trg_line.strip(), \
+                                               hyp_line.strip()
                 if src_line != '' and trg_line != '':
                     examples.append(data.Example.fromlist(
                         [src_line, trg_line, hyp_line], fields))
