@@ -4,6 +4,7 @@ This modules holds methods for generating predictions from a model.
 """
 import os
 import sys
+import logging
 from typing import List, Optional
 import numpy as np
 
@@ -21,12 +22,15 @@ from joeynmt.vocabulary import Vocabulary
 
 
 # pylint: disable=too-many-arguments,too-many-locals,no-member
-def validate_on_data(model: Model, data: Dataset, batch_size: int,
+def validate_on_data(model: Model, data: Dataset,
+                     batch_size: int,
                      use_cuda: bool, max_output_length: int,
                      level: str, eval_metric: Optional[str],
                      loss_function: torch.nn.Module = None,
                      beam_size: int = 0, beam_alpha: int = -1,
-                     return_logp: bool = False) \
+                     return_logp: bool = False,
+                     batch_type: str = "sentence"
+                     ) \
         -> (float, float, float, List[str], List[List[str]], List[str],
             List[str], List[List[str]], List[np.array], Optional[np.array]):
     """
@@ -48,6 +52,7 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
     :param beam_alpha: beam search alpha for length penalty,
         disabled if set to -1 (default).
     :param return_logp: keep track of log probabilities of hypotheses as well
+    :param batch_type: validation batch type (sentence or token)
 
     :return:
         - current_valid_score: current validation score [eval_metric],
@@ -61,9 +66,10 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
         - valid_attention_scores: attention scores for validation hypotheses
         - valid_logprobs: log probabilities of validation hypotheses
     """
-    valid_iter = make_data_iter(dataset=data, batch_size=batch_size,
-                                shuffle=False, train=False)
-    valid_sources_raw = [s for s in data.src]
+    valid_iter = make_data_iter(
+        dataset=data, batch_size=batch_size, batch_type=batch_type,
+        shuffle=False, train=False)
+    valid_sources_raw = data.src
     pad_index = model.src_vocab.stoi[PAD_TOKEN]
     # disable dropout
     model.eval()
@@ -74,6 +80,7 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
         valid_attention_scores = []
         total_loss = 0
         total_ntokens = 0
+        total_nseqs = 0
         for valid_batch in iter(valid_iter):
             # run as during training to get validation loss (e.g. xent)
 
@@ -87,6 +94,7 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
                     batch, loss_function=loss_function)
                 total_loss += batch_loss
                 total_ntokens += batch.ntokens
+                total_nseqs += batch.nseqs
 
             # run as during inference to produce translations
             output, attention_scores, logprobs = model.run_batch(
@@ -154,10 +162,13 @@ def validate_on_data(model: Model, data: Dataset, batch_size: int,
         decoded_valid, valid_attention_scores, valid_logprobs
 
 
+# pylint: disable-msg=logging-too-many-args
 def test(cfg_file,
          ckpt: str,
          output_path: str = None,
-         save_attention: bool = False) -> None:
+         output_path_logp: str = None,
+         save_attention: bool = False,
+         logger: logging.Logger = None) -> None:
     """
     Main test function. Handles loading a model from checkpoint, generating
     translations and storing them and attention plots.
@@ -166,14 +177,22 @@ def test(cfg_file,
     :param ckpt: path to checkpoint to load
     :param output_path: path to output
     :param save_attention: whether to save the computed attention weights
+    :param logger: log output to this logger (creates new logger if not set)
+    :param output_path_logp: file where to write the log probabilities
     """
+
+    if logger is None:
+        logger = logging.getLogger(__name__)
+        FORMAT = '%(asctime)-15s - %(message)s'
+        logging.basicConfig(format=FORMAT)
+        logger.setLevel(level=logging.DEBUG)
 
     cfg = load_config(cfg_file)
 
     if "test" not in cfg["data"].keys():
         raise ValueError("Test data must be specified in config.")
 
-    # when checkpoint is not specified, take oldest from model dir
+    # when checkpoint is not specified, take latest (best) from model dir
     if ckpt is None:
         model_dir = cfg["training"]["model_dir"]
         ckpt = get_latest_checkpoint(model_dir)
@@ -185,11 +204,15 @@ def test(cfg_file,
         except IndexError:
             step = "best"
 
-    batch_size = cfg["training"]["batch_size"]
+    batch_size = cfg["training"].get(
+        "eval_batch_size", cfg["training"]["batch_size"])
+    batch_type = cfg["training"].get(
+        "eval_batch_type", cfg["training"].get("batch_type", "sentence"))
     use_cuda = cfg["training"].get("use_cuda", False)
     level = cfg["data"]["level"]
     eval_metric = cfg["training"]["eval_metric"]
     max_output_length = cfg["training"].get("max_output_length", None)
+    return_logp = cfg["testing"].get("return_logp", False)
 
     # load the data
     _, dev_data, test_data, src_vocab, trg_vocab = load_data(
@@ -223,42 +246,60 @@ def test(cfg_file,
         #pylint: disable=unused-variable
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
         hypotheses_raw, attention_scores, logprobs = validate_on_data(
-            model, data=data_set, batch_size=batch_size, level=level,
+            model, data=data_set, batch_size=batch_size,
+            batch_type=batch_type, level=level,
             max_output_length=max_output_length, eval_metric=eval_metric,
             use_cuda=use_cuda, loss_function=None, beam_size=beam_size,
-            beam_alpha=beam_alpha)
+            beam_alpha=beam_alpha, return_logp=return_logp)
         #pylint: enable=unused-variable
 
         if "trg" in data_set.fields:
             decoding_description = "Greedy decoding" if beam_size == 0 else \
                 "Beam search decoding with beam size = {} and alpha = {}".\
                     format(beam_size, beam_alpha)
-            print("{:4s} {}: {} [{}]".format(
-                data_set_name, eval_metric, score, decoding_description))
+            logger.info("%4s %s: %6.2f [%s]",
+                        data_set_name, eval_metric, score, decoding_description)
         else:
-            print("No references given for {} -> no evaluation.".format(
-                data_set_name))
+            logger.info("No references given for %s -> no evaluation.",
+                        data_set_name)
 
-        if attention_scores is not None and save_attention:
-            attention_path = "{}/{}.{}.att".format(model_dir, data_set_name,
-                                                   step)
-            print("Attention plots saved to: {}.xx".format(attention_path))
-            store_attention_plots(attentions=attention_scores,
-                                  targets=hypotheses_raw,
-                                  sources=[s for s in data_set.src],
-                                  indices=range(len(hypotheses)),
-                                  output_prefix=attention_path)
+        if save_attention:
+            if attention_scores:
+                attention_name = "{}.{}.att".format(data_set_name, step)
+                attention_path = os.path.join(model_dir, attention_name)
+                logger.info("Saving attention plots. This might take a while..")
+                store_attention_plots(attentions=attention_scores,
+                                      targets=hypotheses_raw,
+                                      sources=data_set.src,
+                                      indices=range(len(hypotheses)),
+                                      output_prefix=attention_path)
+                logger.info("Attention plots saved to: %s", attention_path)
+            else:
+                logger.warning("Attention scores could not be saved. "
+                               "Note that attention scores are not available "
+                               "when using beam search. "
+                               "Set beam_size to 0 for greedy decoding.")
 
         if output_path is not None:
             output_path_set = "{}.{}".format(output_path, data_set_name)
+            postprocess = cfg["data"].get("post_process", True)
             with open(output_path_set, mode="w", encoding="utf-8") as out_file:
-                if cfg["data"].get("post_process", True):
+                if postprocess:
                     for hyp in hypotheses:
                         out_file.write(hyp + "\n")
                 else:
                     for hyp in hypotheses_raw:
                         out_file.write(" ".join(hyp)+ "\n")
-            print("Translations saved to: {}".format(output_path_set))
+            print("Translations (postprocessed={}) saved to: {}".format(
+                postprocess, output_path_set))
+
+        if output_path_logp is not None:
+            output_path_set_logp = "{}.{}".format(output_path_logp,
+                                                  data_set_name)
+            with open(output_path_set_logp, mode="w", encoding="utf-8") as f:
+                for l in logprobs:
+                    f.write("{}\n".format(l))
+            logger.info("Test log probs saved to: %s", output_path_set_logp)
 
 #pylint: disable=too-many-branches
 def translate(cfg_file, ckpt: str, output_path: str = None) -> None:
@@ -297,7 +338,8 @@ def translate(cfg_file, ckpt: str, output_path: str = None) -> None:
         # pylint: disable=unused-variable
         score, loss, ppl, sources, sources_raw, references, hypotheses, \
         hypotheses_raw, attention_scores, log_probs = validate_on_data(
-            model, data=test_data, batch_size=batch_size, level=level,
+            model, data=test_data, batch_size=batch_size,
+            batch_type=batch_type, level=level,
             max_output_length=max_output_length, eval_metric="",
             use_cuda=use_cuda, loss_function=None, beam_size=beam_size,
             beam_alpha=beam_alpha, return_logp=return_logp)
@@ -310,15 +352,18 @@ def translate(cfg_file, ckpt: str, output_path: str = None) -> None:
         model_dir = cfg["training"]["model_dir"]
         ckpt = get_latest_checkpoint(model_dir)
 
-    batch_size = cfg["training"].get("batch_size", 1)
+    batch_size = cfg["training"].get(
+        "eval_batch_size", cfg["training"].get("batch_size", 1))
+    batch_type = cfg["training"].get(
+        "eval_batch_type", cfg["training"].get("batch_type", "sentence"))
     use_cuda = cfg["training"].get("use_cuda", False)
     level = cfg["data"]["level"]
     max_output_length = cfg["training"].get("max_output_length", None)
 
     # read vocabs
-    src_vocab_file = cfg["training"].get(
+    src_vocab_file = cfg["data"].get(
         "src_vocab", cfg["training"]["model_dir"] + "/src_vocab.txt")
-    trg_vocab_file = cfg["training"].get(
+    trg_vocab_file = cfg["data"].get(
         "trg_vocab", cfg["training"]["model_dir"] + "/trg_vocab.txt")
     src_vocab = Vocabulary(file=src_vocab_file)
     trg_vocab = Vocabulary(file=trg_vocab_file)

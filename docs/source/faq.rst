@@ -11,7 +11,9 @@ Training
 ^^^^^^^^
 
 - **How can I train the model on GPU/CPU?**
-   Set the ``use_cuda`` flag in the configuration to True for training on GPU (requires CUDA) or to False for training on CPU.
+   First of all, make sure you have the correct version of pytorch installed. 
+   When running on *GPU* you need to manually install the suitable PyTorch version for your [CUDA](https://developer.nvidia.com/cuda-zone) version. This is described in the [PyTorch installation instructions](https://pytorch.org/get-started/locally/).
+   Then set the ``use_cuda`` flag in the configuration to True for training on GPU (requires CUDA) or to False for training on CPU.
 
 - **How can I stop training?**
    Simply press Control+C.
@@ -104,6 +106,9 @@ Configurations
    A bi-directional RNN with *k* hidden units will have *k* hidden units in the forward RNN plus *k* for the backward RNN.
    This might be different in other toolkits where the number of hidden units is divided by two to use half of them each for backward and forward RNN.
 
+- **My model with configs/small.yaml doesn't perform well.`**
+  No surprise! This configuration is created for the purpose of documentation: it contains all parameter settings with a description. It does not perform well on the actual task that it uses. Try the reverse or copy task instead!
+
 Data
 ^^^^
 - **Does JoeyNMT pre-process my data?**
@@ -123,26 +128,25 @@ Debugging
    Consider reducing ``batch_size``. The mini-batch size can be virtually increased by a factor of *k* by setting ``batch_multiplier`` to *k*.
    Tensor operations are still performed with ``batch_size`` instances each, but model updates are done after *k* of these mini-batches.
 
-- **My model is too slow. What can I do?**
-- **My model stopped improving, but didn't stop training. What can I do?**
-- **My model performs well on the validation set, but terrible on the test set. What's wrong?**
-- **My model produces translations that are generally too short. What's wrong?**
 
 Features
 --------
+- **Which models does Joey NMT implement?**
+   For the exact description of the RNN and Transformer model, check out the `paper <https://www.cl.uni-heidelberg.de/~kreutzer/joeynmt/joeynmt_demo.pdf>`_.
 - **Why is there no convolutional model?**
    We might add it in the future, but from our experience, the most popular models are recurrent and self-attentional.
 - **How are the parameters initialized?**
    Check the description in `initialization.py <https://github.com/joeynmt/joeynmt/blob/master/joeynmt/initialization.py#L60>`_.
 - **Is there the option to ensemble multiple models?**
-   Not yet.
+   You can do checkpoint averaging to combine multiple models. Use the `average_checkpoints script <https://github.com/joeynmt/joeynmt/blob/master/joeynmt/scripts/average_checkpoints.py>`_.
 - **What is a bridge?**
    We call the connection between recurrent encoder and decoder states the *bridge*.
    This can either mean that the decoder states are initialized by copying the last (forward) encoder state (``init_hidden: "last"``),
    by learning a projection of the last encoder state (``init_hidden: "bridge"``) or simply zeros (``init_hidden: "zero"``).
 - **Does learning rate scheduling matter?**
-
+   Yes! Especially if you start with a high learning rate -- make sure you don't decay it too quickly or slowly.
 - **What is early stopping?**
+   Early stopping means that we track the quality on the validation set and stop at a good point before complete convergence.
 
 - **Is validation performed with greedy decoding or beam search?**
    Greedy decoding, since it's faster and usually aligns with model selection by beam search validation.
@@ -162,18 +166,34 @@ Features
 
 Model Extensions
 ----------------
-- **How can I make my model multi-task?**
-- **How can I feed my model multiple inputs?**
-- **How can I add a regularizer to the loss?**
+- **I want to extend Joey NMT -- where do I start? Where do I have to modify the code?**
+  Depends on the scope of your extension. In general, we can recommend describing the desired behavior in the config (e.g. 'use_my_feature:True') and then passing this value along the forward pass and modify the model according to it.
+  If your just loading more/richer inputs, you will only have to modify the part from the corpus reading to the encoder input. If you want to modify the training objective, you will naturally work in 'loss.py'.
+  Logging and unit tests are very useful tools for tracking the changes of your implementation as well.
+- **How do I integrate a new learning rate scheduler?**
+  1. Check out the existing schedulers in `builders.py <https://github.com/joeynmt/joeynmt/blob/master/joeynmt/builders.py>`_, some of them are imported from PyTorch. The "Noam" scheduler is implemented here directly, you can use its code as a template how to implement a new scheduler.
+  2. You basically need to implement the ``step`` function that implements whatever happens when the scheduler is asked to make a step (either after every validation (``scheduler_step_at="validation"``) or every batch (``scheduler_step_at="step"``)). In that step, the learning rate can
+  be modified just as you like (``rate = self._compute_rate()``). In order to make an effective update of the learning rate, the learning rate for the optimizer's parameter groups have to be set to the new value (``for p in self.optimizer.param_groups: p['lr'] = rate``).
+  3. The last thing that is missing is the parsing of configuration parameters to build the scheduler object. Once again, follow the example of existing schedulers and integrate the code for constructing your new scheduler in the ``build_scheduler`` function.
+  4. Give the new scheduler a try! Integrate it in a basic configuration file and check in the training log and the validation reports whether the learning rate is behaving as desired.
 
 Contributing
 ------------
 - **How can I contribute?**
+  Check out the current issues and look for "beginner-friendly" tags and grab one of these.
 - **What's in a Pull Request?**
+  Opening a pull request means that you have written code that you want to contribute to Joey NMT. In order to communicate what your code does, please write a description of new features, defaults etc.
+  Your new code should also pass tests and adher to style guidelines, this will be tested automatically. The code will only be pushed when all issues raised by reviewers have been addressed.
+  See also `here <https://help.github.com/en/articles/about-pull-requests>`_.
 
 Miscellaneous
 -------------
 - **Why should I use JoeyNMT rather than other NMT toolkits?**
+  It's easy to use, it is well documented, and it works just as well as other toolkits out-of-the-box. It does and will not implement all latest features, but rather the core features that make up for 99% of the quality.
+  That means for you, once you know how to work with it, we guarantee you the code won't completely change from one day to the next.
 - **I found a bug in your code, what should I do?**
+  Describe it in an issue on GitHub! And even better: fix it and create a pull request. Open source contributions look good on your CV! ;)
 - **How can I check whether my model is significantly better than my baseline model?**
+  Run significance tests, e.g. with `Multeval <https://github.com/jhclark/multeval>`_.
 - **Where can I find training data?**
+  See :ref:`resources`.

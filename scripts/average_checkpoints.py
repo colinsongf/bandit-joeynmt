@@ -1,17 +1,15 @@
-# coding: utf-8
+#!/usr/bin/env python3
 
 """
 Checkpoint averaging 
 
-Mainly follow: 
+Mainly follows:
 https://github.com/pytorch/fairseq/blob/master/scripts/average_checkpoints.py
 """
 
 import argparse
 import collections
 import torch
-import os
-import re
 from typing import List
 
 
@@ -33,7 +31,8 @@ def average_checkpoints(inputs: List[str]) -> dict:
         state = torch.load(
             f,
             map_location=(
-                lambda s, _: torch.serialization.default_restore_location(s, 'cpu')
+                lambda s, _: torch.serialization.default_restore_location(
+                    s, 'cpu')
             ),
         )
         # Copies over the settings from the first checkpoint
