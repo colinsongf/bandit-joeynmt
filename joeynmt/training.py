@@ -28,7 +28,7 @@ from joeynmt.helpers import log_data_info, load_config, log_cfg, \
     get_latest_checkpoint
 from joeynmt.model import Model
 from joeynmt.prediction import validate_on_data
-from joeynmt.loss import XentLoss, WeightedCrossEntropy
+from joeynmt.loss import WeightedCrossEntropyLoss
 from joeynmt.data import load_data, make_data_iter
 from joeynmt.builders import build_optimizer, build_scheduler, \
     build_gradient_clipper
@@ -66,8 +66,8 @@ class TrainManager:
 
         # objective
         self.label_smoothing = train_config.get("label_smoothing", 0.0)
-        self.loss = WeightedCrossEntropy(ignore_index=self.pad_index,
-                                         smoothing=self.label_smoothing)
+        self.loss = WeightedCrossEntropyLoss(pad_index=self.pad_index,
+                                             smoothing=self.label_smoothing)
         # nn.NLLLoss(ignore_index=self.pad_index, reduction='sum')
         #self.loss = XentLoss(pad_index=self.pad_index,
         #                     smoothing=self.label_smoothing)

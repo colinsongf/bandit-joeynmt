@@ -175,7 +175,7 @@ class Model(nn.Module):
                     src_mask=batch.src_mask, embed=self.trg_embed,
                     bos_index=self.bos_index, decoder=self.decoder,
                     max_output_length=max_output_length,
-                    return_logp = return_logp)
+                    return_logp = return_logp, eos_index=self.eos_index)
 
             # batch, time, max_src_length
         else:  # beam size

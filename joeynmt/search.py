@@ -104,7 +104,7 @@ def recurrent_greedy(
 
         if return_logp:
             end_mask = end < 1  # True for tokens up till eos (incl), then False
-            log_prob = F.log_softmax(out, dim=2).squeeze(1)
+            log_prob = F.log_softmax(logits, dim=2).squeeze(1)
             selected_log_prob = log_prob.index_select(
                 1, next_word.squeeze())[:, 0].cpu().numpy()
             log_probs += end_mask*selected_log_prob
@@ -121,7 +121,8 @@ def recurrent_greedy(
 def transformer_greedy(
         src_mask: Tensor, embed: Embeddings, bos_index: int,
         eos_index: int, max_output_length: int, decoder: Decoder,
-        encoder_output: Tensor, encoder_hidden: Tensor) -> (np.array, np.array):
+        encoder_output: Tensor, encoder_hidden: Tensor,
+        return_logp: bool = False) -> (np.array, np.array):
     """
     Special greedy function for transformer, since it works differently.
     The transformer remembers all previous states and attends to them.
@@ -134,12 +135,16 @@ def transformer_greedy(
     :param decoder: decoder to use for greedy decoding
     :param encoder_output: encoder hidden states for attention
     :param encoder_hidden: encoder final state (unused in Transformer)
+    :param return_logp: return log probabilities as well
     :return:
         - stacked_output: output hypotheses (2d array of indices),
         - stacked_attention_scores: attention scores (3d array)
+        - log_probs: log probabilities of hypotheses (vector, optional)
     """
 
     batch_size = src_mask.size(0)
+    log_probs = np.zeros(batch_size)
+    end = np.zeros(batch_size)
 
     # start with BOS-symbol for each sentence in the batch
     ys = encoder_output.new_full([batch_size, 1], bos_index, dtype=torch.long)
@@ -165,11 +170,20 @@ def transformer_greedy(
 
             logits = logits[:, -1]
             _, next_word = torch.max(logits, dim=1)
+            pred = next_word.cpu().numpy()
+            end += (pred == eos_index)  # check if eos reached
             next_word = next_word.data
             ys = torch.cat([ys, next_word.unsqueeze(-1)], dim=1)
 
+            if return_logp:
+                end_mask = end < 1  # True for tokens up till eos (incl), then False
+                log_prob = F.log_softmax(logits, dim=2).squeeze(1)
+                selected_log_prob = log_prob.index_select(
+                    1, next_word.squeeze())[:, 0].cpu().numpy()
+                log_probs += end_mask * selected_log_prob
+
     ys = ys[:, 1:]  # remove BOS-symbol
-    return ys, None
+    return ys, None, log_probs
 
 # pylint: disable=too-many-statements,too-many-branches
 def beam_search(
