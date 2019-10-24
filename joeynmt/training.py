@@ -85,9 +85,10 @@ class TrainManager:
         # Reference: https://github.com/pytorch/pytorch/issues/1489
         all_params = list(model.named_parameters())
         sorted_params = sorted(all_params)
-        sorted_params = OrderedDict(sorted_params)
+        #sorted_params = OrderedDict(sorted_params)
         self.optimizer = build_optimizer(config=train_config,
-                                         parameters=sorted_params.values())
+                                         parameters=model.parameters())
+                                         #parameters=sorted_params.values())
 
         # save checkpoint by epoch 
         self.save_freq = train_config.get("save_freq", -1)
