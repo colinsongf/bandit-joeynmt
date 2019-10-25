@@ -293,7 +293,7 @@ def test(cfg_file,
             print("Translations (postprocessed={}) saved to: {}".format(
                 postprocess, output_path_set))
 
-        if output_path_logp is not None:
+        if output_path_logp is not None and return_logp:
             output_path_set_logp = "{}.{}".format(output_path_logp,
                                                   data_set_name)
             with open(output_path_set_logp, mode="w", encoding="utf-8") as f:
