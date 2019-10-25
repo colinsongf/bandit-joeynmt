@@ -637,8 +637,8 @@ def train(cfg_file: str) -> None:
         ckpt = get_latest_checkpoint(trainer.model_dir)
 
     output_name = "{:08d}.hyps".format(trainer.best_ckpt_iteration)
-    output_path_logp = "{:08d}.logp".format(trainer.best_ckpt_iteration)
     output_path = os.path.join(trainer.model_dir, output_name)
+    output_path_logp = output_path.replace("hyps", "logp")
     test(cfg_file, ckpt=ckpt, output_path=output_path, logger=trainer.logger,
          output_path_logp=output_path_logp)
 
