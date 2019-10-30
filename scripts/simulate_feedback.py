@@ -70,7 +70,7 @@ def token_edit(h, r):
     cols = len(m[0])
     current = (rows-1, cols-1)
     edits = []
-    while current != (0, 0):
+    while current[0]>0 and current[1]>0:
         current_val = m[current[0]][current[1]]
         diagonal_val = m[current[0]-1][current[1]-1]
         up_val = m[current[0]-1][current[1]]
