@@ -1,7 +1,7 @@
 import argparse
 import sacrebleu
 import pyter
-
+import numpy as np
 
 def sentence_bleu(h, r):
     return sacrebleu.sentence_bleu(hypothesis=h, reference=r)
@@ -10,6 +10,11 @@ def sentence_bleu(h, r):
 def sentence_ter(h,r):
     edits = pyter.edit_distance(s=h.split(), t=r.split())
     return edits / len(r.split()) if len(r.split()) > 0 else 0
+
+
+def sentence_random(h, r):
+    # TODO tune stdev and mean
+    return min(max(np.random.normal(0.5, 0.2), 0), 1)
 
 
 def sentence_chrf(h,r):
@@ -34,6 +39,14 @@ def token_exact_match(h, r):
         matches[i] = float(hi == ri)
         i += 1
     return matches
+
+
+def token_random(h, r):
+    # TODO tune edit rate
+    edit_rate = 0.5
+    probs = np.random.uniform(0, 1, size=(len(h)))
+    return [float(p > edit_rate) for p in probs]
+
 
 
 def token_lcs(h, r):
@@ -103,6 +116,7 @@ def token_edit(h, r):
 
 def compute_token_reward(h, r, reward_type):
     reward_fun = {"lcs": token_lcs, "lcs_all": token_lcs_all,
+                  "random": sentence_random,
                   "edit": token_edit, "match": token_exact_match}
     rewards = reward_fun[reward_type](h, r)
     return " ".join([str(r) for r in rewards])
@@ -111,7 +125,7 @@ def compute_token_reward(h, r, reward_type):
 def compute_sentence_reward(h, r, reward_type):
     reward_fun = {"ter": sentence_ter, "bleu": sentence_bleu,
                   "chrf": sentence_chrf, "simile": sentence_simile,
-                  "match": sentence_exact_match}
+                  "match": sentence_exact_match, "random": sentence_random}
     reward = reward_fun[reward_type](h, r)
     return reward
 
