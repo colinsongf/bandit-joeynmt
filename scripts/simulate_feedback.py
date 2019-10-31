@@ -12,7 +12,8 @@ def sentence_bleu(h, r):
 
 
 def sentence_ter(h,r):
-    ter = pyter.ter(h.split(), r.split())
+    # bounded ter
+    ter = min(max(pyter.ter(h.split(), r.split()), 0), 1)
     return ter
 
 
