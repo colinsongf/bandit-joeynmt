@@ -157,7 +157,7 @@ def main(args):
                 # compute reward for the whole sentence
                 rewards = compute_sentence_reward(hyp, ref, args.reward_type)
                 print(rewards)
-                all_rewards.extend(rewards)
+                all_rewards.append(rewards)
 
             outfile.write("{}\n".format(rewards))
 
