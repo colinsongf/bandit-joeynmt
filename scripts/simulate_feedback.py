@@ -2,6 +2,10 @@ import argparse
 import sacrebleu
 import pyter
 import numpy as np
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
+
 
 def sentence_bleu(h, r):
     return sacrebleu.sentence_bleu(hypothesis=h, reference=r)
@@ -131,6 +135,7 @@ def compute_sentence_reward(h, r, reward_type):
 
 def main(args):
     reward_suffix = ".{}.{}".format(args.reward_level, args.reward_type)
+    all_rewards = []
     with open(args.target, "r") as tfile, open(args.reference, "r") as rfile, \
         open(args.target+reward_suffix, "w") as outfile:
 
@@ -152,8 +157,15 @@ def main(args):
                 rewards = compute_sentence_reward(hyp, ref, args.reward_type)
                 print(rewards)
 
+            all_rewards.extend([float(r) for r in rewards.split()])
+
             outfile.write("{}\n".format(rewards))
 
+    print("Avg reward", np.mean(all_rewards))
+    print("Std reward", np.std(all_rewards))
+
+    plt.hist(all_rewards)
+    plt.savefig(args.target+reward_suffix+".hist.pdf")
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
