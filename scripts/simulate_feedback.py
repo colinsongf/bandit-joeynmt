@@ -44,9 +44,8 @@ def token_exact_match(h, r):
 def token_random(h, r):
     # TODO tune edit rate
     edit_rate = 0.5
-    probs = np.random.uniform(0, 1, size=(len(h)))
+    probs = np.random.uniform(0, 1, size=(len(h.split())))
     return [float(p > edit_rate) for p in probs]
-
 
 
 def token_lcs(h, r):
@@ -116,7 +115,7 @@ def token_edit(h, r):
 
 def compute_token_reward(h, r, reward_type):
     reward_fun = {"lcs": token_lcs, "lcs_all": token_lcs_all,
-                  "random": sentence_random,
+                  "random": token_random,
                   "edit": token_edit, "match": token_exact_match}
     rewards = reward_fun[reward_type](h, r)
     return " ".join([str(r) for r in rewards])
