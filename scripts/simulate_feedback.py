@@ -131,6 +131,8 @@ def main(args):
             if args.reward_level == "token":
                 # compute reward for each token
                 rewards = compute_token_reward(hyp, ref, args.reward_type)
+                print(len(rewards.split()), len(hyp.split()))
+                assert len(rewards.split()) == len(hyp.split())
                 print(*zip(rewards.split(), hyp.split()))
             else:
                 # compute reward for the whole sentence
