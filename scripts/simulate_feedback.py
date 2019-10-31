@@ -152,12 +152,12 @@ def main(args):
                 print(len(rewards.split()), len(hyp.split()))
                 assert len(rewards.split()) == len(hyp.split())
                 print(*zip(rewards.split(), hyp.split()))
+                all_rewards.extend([float(r) for r in rewards.split()])
             else:
                 # compute reward for the whole sentence
                 rewards = compute_sentence_reward(hyp, ref, args.reward_type)
                 print(rewards)
-
-            all_rewards.extend([float(r) for r in rewards.split()])
+                all_rewards.extend(rewards)
 
             outfile.write("{}\n".format(rewards))
 
