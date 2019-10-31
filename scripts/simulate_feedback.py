@@ -4,7 +4,7 @@ import pyter
 
 
 def sentence_bleu(h, r):
-    return sacrebleu.sentence_bleu(hypothesis=h, reference=r)
+    return sacrebleu.sentence_bleu(hypothesis=h, reference=r)/100.
 
 
 def sentence_ter(h,r):
