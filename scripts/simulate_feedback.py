@@ -12,8 +12,8 @@ def sentence_bleu(h, r):
 
 
 def sentence_ter(h,r):
-    edits = pyter.edit_distance(s=h.split(), t=r.split())
-    return edits / len(r.split()) if len(r.split()) > 0 else 0
+    ter = pyter.ter(h.split(), r.split())
+    return ter
 
 
 def sentence_random(h, r):
