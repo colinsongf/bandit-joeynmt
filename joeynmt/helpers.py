@@ -83,7 +83,7 @@ def log_cfg(cfg: dict, logger: Logger, prefix: str = "cfg") -> None:
             p = '.'.join([prefix, k])
             log_cfg(v, logger, prefix=p)
         else:
-            p = '.'.join([prefix, k])
+            p = '.'.join([prefix, str(k)])
             logger.info("{:34s} : {}".format(p, v))
 
 
