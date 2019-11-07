@@ -264,6 +264,9 @@ class WeightedTranslationDataset(Dataset):
                                 (len(trg_token)+1)*[token_weight])
                         # remove last added weight for whitespace
                         weights = char_weights[:-1]
+                    if len(weights) == 1 and "sentence" in feedback_path: 
+                        # one score for the full sentence
+                        weights = [weights[0]]*len(fields[1][1].tokenize(trg_line))
                     assert len(weights) == len(fields[1][1].tokenize(trg_line))
                     examples.append(data.Example.fromlist(
                         [src_line, trg_line, weights], fields))
