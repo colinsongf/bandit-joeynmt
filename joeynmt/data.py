@@ -47,6 +47,7 @@ def load_data(data_cfg: dict) -> (Dataset, Dataset, Optional[Dataset],
     level = data_cfg["level"]
     lowercase = data_cfg["lowercase"]
     max_sent_length = data_cfg["max_sent_length"]
+    feedback_weights = data_cfg.get("feedback_weights", None)
 
     tok_fun = lambda s: list(s) if level == "char" else s.split()
 
@@ -73,7 +74,8 @@ def load_data(data_cfg: dict) -> (Dataset, Dataset, Optional[Dataset],
             fields=(src_field, trg_field, weight_field),
             filter_pred=
             lambda x: len(vars(x)['src']) <= max_sent_length and
-                      len(vars(x)['trg']) <= max_sent_length)
+                      len(vars(x)['trg']) <= max_sent_length,
+            feedback_weights=feedback_weights)
 
     else:
         train_data = TranslationDataset(path=train_path,
@@ -225,7 +227,7 @@ class MonoDataset(Dataset):
 class WeightedTranslationDataset(Dataset):
     """ Defines a parallel dataset with weights for the targets. """
 
-    def __init__(self, path, exts, fields, level, **kwargs):
+    def __init__(self, path, exts, fields, level, feedback_weights, **kwargs):
         """Create a TranslationDataset given paths and fields.
 
         :param path: Prefix of path to the data file
@@ -233,6 +235,8 @@ class WeightedTranslationDataset(Dataset):
         :param field: Containing the fields that will be used for data.
         :param kwargs: Passed to the constructor of data.Dataset.
         :param level: char or word or bpe
+        :param feedback_weights: dictionary mapping feedback values to
+          loss weights
         """
 
         if not isinstance(fields[0], (tuple, list)):
@@ -250,6 +254,9 @@ class WeightedTranslationDataset(Dataset):
                 src_line, trg_line = src_line.strip(), trg_line.strip()
                 weights = [float(weight) for weight in
                            weights_line.strip().split(" ")]
+                if feedback_weights is not None:
+                    # lookup weights for individual feedback types
+                    weights = [feedback_weights.get(w, w) for w in weights]
                 if src_line != '' and trg_line != '':
                     # there must be feedback for every token
                     if level == "char":

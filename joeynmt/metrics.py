@@ -4,6 +4,8 @@ This module holds various MT evaluation metrics.
 """
 
 import sacrebleu
+import pyter
+import numpy as np
 
 
 def chrf(hypotheses, references):
@@ -65,3 +67,27 @@ def sequence_accuracy(hypotheses, references):
     correct_sequences = sum([1 for (hyp, ref) in zip(hypotheses, references)
                              if hyp == ref])
     return (correct_sequences / len(hypotheses))*100 if hypotheses else 0.0
+
+
+def ter(hypotheses, references):
+    """
+    Compute the average Translation Error Rate.
+    Counts ratio of number of edits needed in hypothesis vs reference length.
+
+    :param hypotheses: list of hypotheses (strings)
+    :param references: list of references (strings)
+    :return:
+    """
+    refs = [r.split() for r in references]
+
+    hyps = [h.split() for h in hypotheses]
+
+    assert len(refs) == len(hyps)
+    ters = []
+    for h, r in zip(hyps, refs):
+        if len(r) == 0:
+            ters.append(0)
+        else:
+            ters.append(pyter.ter(h, r))
+    avg_ter = np.mean(ters)  # macro avg
+    return avg_ter
