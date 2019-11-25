@@ -90,4 +90,4 @@ def ter(hypotheses, references):
         else:
             ters.append(pyter.ter(h, r))
     avg_ter = np.mean(ters)  # macro avg
-    return avg_ter
+    return avg_ter*100
