@@ -159,7 +159,8 @@ class TrainManager:
             self.logger.info("Loading model from %s", model_load_path)
             overwrite_optim_params = train_config.get(
                 "overwrite_optim_params", True)
-            self.init_from_checkpoint(model_load_path, overwrite_optim_params)
+            overwrite_scheduler = train_config.get("overwrite_scheduler", True)
+            self.init_from_checkpoint(model_load_path, overwrite_optim_params, overwrite_scheduler)
 
         # initialize training statistics
         self.steps = 0
@@ -221,7 +222,8 @@ class TrainManager:
             torch.save(state, best_path)
 
     def init_from_checkpoint(self, path: str, 
-                             overwrite_optim_params: bool=True) -> None:
+                             overwrite_optim_params: bool=True, 
+                             overwrite_scheduler: bool=True) -> None:
         """
         Initialize the trainer from a given checkpoint file.
 
@@ -233,6 +235,9 @@ class TrainManager:
                                        of optimizer using values from   
                                        checkpoint. 
                                        If False, use values defined in config.
+        :param overwrite_scheduler: If True, overwrite hyper-params of 
+                                    scheduler using values from checkpoint.
+                                    Else use values defined in config.
         """
         model_checkpoint = load_checkpoint(path=path, use_cuda=self.use_cuda)
 
@@ -240,14 +245,16 @@ class TrainManager:
         self.model.load_state_dict(model_checkpoint["model_state"])
         if overwrite_optim_params:
             self.optimizer.load_state_dict(model_checkpoint["optimizer_state"])
-            self.logger.info("Overwrite optim")
+            self.logger.info("Overwrite optimizer.")
 
         self.logger.info("Optim; lr:{}".format(
             self.optimizer.param_groups[0]["lr"]))
 
-        if model_checkpoint["scheduler_state"] is not None and \
-                self.scheduler is not None:
-            self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
+        if overwrite_scheduler:
+            if model_checkpoint["scheduler_state"] is not None and \
+                    self.scheduler is not None:
+                self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
+                self.logger.info("Overwrite scheduler.")
 
         # restore counts
         self.steps = model_checkpoint["steps"]
