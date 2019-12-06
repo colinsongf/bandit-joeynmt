@@ -9,12 +9,14 @@ data: # specify your data here
     test: "test/data/toy/test"  # test data for testing final model; optional
     level: "word" # segmentation level: either "word", "bpe" or "char"
     lowercase: True # lowercase the data, also for validation
+    feedback_weights: {0: -0.1, 1: 0.5, 0.6704235076301422: -5}
     max_sent_length: 30 # filter out longer sentences from training (src+trg)
     src_voc_min_freq: 1 # src minimum frequency for a token to become part of the vocabulary
     src_voc_limit: 101  # src vocabulary only includes this many most frequent tokens, default: unlimited
     trg_voc_min_freq: 1 # trg minimum frequency for a token to become part of the vocabulary
     trg_voc_limit: 102  # trg vocabulary only includes this many most frequent tokens, default: unlimited
     post_process: True
+    select_random: -1  # select this many training examples randomly for training and discard the rest
     #src_vocab: "my_model/src_vocab.txt"  # if specified, load a vocabulary from this file
     #trg_vocab: "my_model/trg_vocab.txt"  # one token per line, line number is index
 
@@ -27,6 +29,7 @@ training: # specify training details here
     #load_model: "my_model/50.ckpt" # if given, load a pre-trained model from this checkpoint
     random_seed: 42 # set this seed to make training deterministic
     optimizer: "adam" # choices: "sgd", "adam", "adadelta", "adagrad", "rmsprop", default is SGD
+    baseline: "sent" # baseline to deduct from feedback weights
     learning_rate: 0.005  # initial learning rate, default: 3.0e-4
     learning_rate_min: 0.0001  # stop learning when learning rate is reduced below this threshold, default: 1.0e-8
     clip_grad_val: 1.0  # clip the gradients to this value when they exceed it, optional
@@ -40,8 +43,8 @@ training: # specify training details here
     epochs: 5  # train for this many epochs
     validation_freq: 10  # validate after this many updates (number of mini-batches), default: 1000
     logging_freq: 10  # log the training progress after this many updates, default: 100
-    eval_metric: "bleu" # validation metric, default: "bleu", other options: "chrf", "token_accuracy", "sequence_accuracy"
-    early_stopping_metric: "loss"  # when a new high score on this metric is achieved, a checkpoint is written, when "eval_metric" (default) is maximized, when "loss" or "ppl" is minimized
+    eval_metric: "ter" # validation metric, default: "bleu", other options: "chrf", "token_accuracy", "sequence_accuracy"
+    early_stopping_metric: "eval_metric"  # when a new high score on this metric is achieved, a checkpoint is written, when "eval_metric" (default) is maximized, when "loss" or "ppl" is minimized
     model_dir: "my_model" # directory where models and validation results are stored, required
     overwrite: True # overwrite existing model directory, default: False. Do not set to True unless for debugging!
     shuffle: True # shuffle the training data, default: True

@@ -5,6 +5,7 @@ Data module
 import sys
 import os
 import os.path
+import random
 from typing import Optional
 
 from torchtext.datasets import TranslationDataset
@@ -27,7 +28,7 @@ def load_data(data_cfg: dict) -> (Dataset, Dataset, Optional[Dataset],
     on source and target side.
 
     :param data_cfg: configuration dictionary for data
-        ("data" part of configuation file)
+              ("data" part of configuation file)
     :return:
         - train_data: training dataset
         - dev_data: development dataset
@@ -101,6 +102,14 @@ def load_data(data_cfg: dict) -> (Dataset, Dataset, Optional[Dataset],
     trg_vocab = build_vocab(field="trg", min_freq=trg_min_freq,
                             max_size=trg_max_size,
                             dataset=train_data, vocab_file=trg_vocab_file)
+
+    select_random = data_cfg.get("select_random", -1)
+    if select_random > -1:
+        # select this many training examples randomly
+        keep_ratio = select_random/len(train_data)
+        keep, discard = train_data.split(split_ratio=[keep_ratio, 1-keep_ratio],
+                                         random_state=random.getstate())
+        train_data = keep
 
     # modified for no dev set cases
     dev_data = None
