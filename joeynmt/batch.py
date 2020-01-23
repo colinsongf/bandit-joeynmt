@@ -3,8 +3,10 @@
 """
 Implementation of a mini-batch.
 """
+import numpy as np
+import torch
 
-
+# pylint: disable=too-many-instance-attributes
 class Batch:
     """Object for holding a batch of data with mask during training.
     Input is a batch from a torch text iterator.
@@ -22,7 +24,7 @@ class Batch:
         :param use_cuda:
         """
         self.src, self.src_lengths = torch_batch.src
-        self.src_mask = (self.src != pad_index).unsqueeze(-2)
+        self.src_mask = (self.src != pad_index).unsqueeze(1)
         self.nseqs = self.src.size(0)
         self.trg_input = None
         self.trg = None
@@ -30,6 +32,9 @@ class Batch:
         self.trg_lengths = None
         self.ntokens = None
         self.use_cuda = use_cuda
+
+        ## Involve the case for translate mode on input file
+        self.weights = None
 
         if hasattr(torch_batch, "trg"):
             trg, trg_lengths = torch_batch.trg
@@ -39,8 +44,22 @@ class Batch:
             # trg is used for loss computation, shifted by one since BOS
             self.trg = trg[:, 1:]
             # we exclude the padded areas from the loss computation
-            self.trg_mask = (self.trg != pad_index)
+            self.trg_mask = (self.trg_input != pad_index).unsqueeze(1)
             self.ntokens = (self.trg != pad_index).data.sum().item()
+
+            if hasattr(torch_batch, "weights"):
+                # one weight per token given
+                # pad remaining areas with 0s
+                weights = np.zeros(shape=self.trg.size())
+                # iterate over batch
+                for i, weight_seq in enumerate(torch_batch.weights):
+                    # iterate over trg tokens
+                    for j, w in enumerate(weight_seq):
+                        weights[i, j] = w
+                    # add one artificial weight for </s>
+                    weights[i, len(weight_seq)] = 1.0
+                self.weights = torch.from_numpy(weights).float().to(
+                    self.trg.device)
 
         if use_cuda:
             self._make_cuda()
@@ -58,6 +77,8 @@ class Batch:
             self.trg_input = self.trg_input.cuda()
             self.trg = self.trg.cuda()
             self.trg_mask = self.trg_mask.cuda()
+        if self.weights is not None:
+            self.weights = self.weights.cuda()
 
     def sort_by_src_lengths(self):
         """

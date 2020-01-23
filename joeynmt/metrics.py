@@ -7,6 +7,7 @@ import sacrebleu
 import pyter
 import numpy as np
 
+
 def chrf(hypotheses, references):
     """
     Character F-score from sacrebleu
@@ -72,6 +73,7 @@ def ter(hypotheses, references):
     """
     Compute the average Translation Error Rate.
     Counts ratio of number of edits needed in hypothesis vs reference length.
+
     :param hypotheses: list of hypotheses (strings)
     :param references: list of references (strings)
     :return:
